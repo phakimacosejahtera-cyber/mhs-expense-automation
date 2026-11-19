@@ -1,0 +1,33 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.env
+.env.*
+!.env.example
+storage/*
+!storage/.gitkeep
+*.sqlite3
+*.sqlite3-*
+.idea/
+.vscode/*.log
+.DS_Store
+/frontend/node_modules/
+/.venv-win/
+/.ocr_patch_backups/
+
+# Database lokal
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# Metadata dari MacBook
+__MACOSX/
+._*
+
+# Arsip ZIP
+*.zip
+
+# Referensi UI pihak ketiga - tetap lokal
+docs/references/XTROI_UI_reference.html

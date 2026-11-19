@@ -1,0 +1,8 @@
+# Normalisasi akhir baris untuk kolaborasi Windows dan macOS
+* text=auto
+
+# Script macOS menggunakan LF
+*.sh text eol=lf
+
+# Script Windows menggunakan CRLF
+*.bat text eol=crlf
