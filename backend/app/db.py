@@ -11,7 +11,7 @@ import uuid, json
 ROOT=Path(__file__).resolve().parents[2]
 DATA = (ROOT/'storage'/'owner-auth-test' if os.getenv('MHS_MODE') == 'owner_test'
         else Path(os.getenv('MHS_DATA_DIR', str(ROOT/'storage'))))
-if os.getenv('MHS_MODE') == 'pg_test':
+if os.getenv('MHS_MODE') in ('pg_test','hosted_preview'):
     DATA = ROOT/'storage'/'postgres-test'
 DATA.mkdir(parents=True,exist_ok=True)
 DB_FILE=DATA/'mhs_expenses.sqlite3'
@@ -26,7 +26,7 @@ class ClosingConnection(sqlite3.Connection):
         finally: self.close()
 
 def using_postgres():
-    return os.getenv('MHS_MODE') == 'pg_test'
+    return os.getenv('MHS_MODE') in ('pg_test','hosted_preview')
 
 def connection():
     if using_postgres():
