@@ -77,10 +77,10 @@ def setup():
             raw.execute("REVOKE ALL ON mhs_owner_test.preview_bucket_metadata FROM PUBLIC, anon, authenticated, service_role")
             raw.execute(sql.SQL("GRANT SELECT ON mhs_owner_test.preview_bucket_metadata TO {}").format(role))
             raw.execute(sql.SQL("ALTER ROLE {} SET search_path TO pg_catalog, mhs_owner_test, pg_temp").format(role))
-    # Commit completed. Never send admin credentials or SQL verifier to clipboard.
-    # PowerShell reads stdin, not a command-line argument containing the secrets.
-    payload="\n".join(k+"="+v for k,v in values.items())
-    subprocess.run(["powershell.exe","-NoProfile","-Command","$input | Set-Clipboard"],input=payload,text=True,check=True,capture_output=True)
+            # If clipboard transfer fails, roll back role creation. If commit fails,
+            # the copied credential block is invalid and must not be used.
+            payload="\n".join(k+"="+v for k,v in values.items())
+            subprocess.run(["powershell.exe","-NoProfile","-Command","$input | Set-Clipboard"],input=payload,text=True,check=True,capture_output=True)
     print("PREVIEW ROLE CREATED; Render environment block copied to clipboard.")
     print("Paste ONLY into Render Add from .env; do not paste into terminal or chat.")
     print("Add certificate secret file prod-ca-2021.crt separately.")
