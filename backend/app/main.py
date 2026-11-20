@@ -5,8 +5,9 @@ Rules are enforced server-side; UI alone is NOT an authorization boundary.
 from .runtime import require_local_app
 
 APP_MODE = require_local_app()
+HOSTED_PREVIEW = APP_MODE == 'hosted_preview'
 from .owner_auth import OwnerConfig, OwnerAuthError, new_verifier, authorize_url, exchange_owner
-OWNER_CONFIG = OwnerConfig.from_env() if APP_MODE in ('owner_test', 'pg_test') else None
+OWNER_CONFIG = OwnerConfig.from_env() if APP_MODE in ('owner_test', 'pg_test', 'hosted_preview') else None
 
 import os, json, hashlib, secrets, mimetypes, re
 from pathlib import Path
@@ -16,6 +17,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI,Request,HTTPException,UploadFile,File,Form
 from fastapi.responses import HTMLResponse,FileResponse,Response,StreamingResponse,RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel,Field
 from openpyxl import Workbook
 from openpyxl.styles import Font,PatternFill,Alignment
@@ -39,6 +41,21 @@ async def security_boundary(request:Request,call_next):
             return apply_security_headers(Response('Invalid host',status_code=400),request.url.path,True)
         if request.method not in ('GET','HEAD','OPTIONS') and request.headers.get('origin') != PUBLIC_ORIGIN:
             return apply_security_headers(Response('Invalid origin',status_code=403),request.url.path,True)
+    if HOSTED_PREVIEW and request.method not in ('GET','HEAD','OPTIONS'):
+        if request.url.path == '/api/auth/login':
+            return apply_security_headers(Response('Google owner login only',status_code=403),request.url.path,True)
+        try:
+            await run_in_threadpool(get_auth,request,True)
+        except HTTPException as e:
+            return apply_security_headers(Response(js({'detail':e.detail}),status_code=e.status_code,media_type='application/json'),request.url.path,True)
+        # Reject oversized or unbounded multipart before parsing the request body.
+        length=request.headers.get('content-length')
+        multipart=request.headers.get('content-type','').lower().startswith('multipart/form-data')
+        limit=9*1024*1024 if multipart else 1024*1024
+        if length is not None and (not length.isdigit() or int(length)>limit):
+            return apply_security_headers(Response('Request terlalu besar atau tidak valid',status_code=413),request.url.path,True)
+        if multipart and length is None:
+            return apply_security_headers(Response('Content-Length required',status_code=411),request.url.path,True)
     response = await call_next(request)
     return apply_security_headers(response,request.url.path,HTTPS_OWNER)
 
@@ -47,6 +64,17 @@ def startup():
     if CLOUD_STORAGE:
         CLOUD_STORAGE.check_private()
     init_schema()
+    if HOSTED_PREVIEW:
+        CLOUD_STORAGE.check_preview_scope()
+        # Reuse only the already initialized synthetic test data and its bound owner.
+        with connection() as c:
+            existing=allrows(c,'SELECT email,role,active FROM users')
+            binding=one(c,'SELECT supabase_id,google_sub FROM owner_login_identity WHERE singleton=1')
+            if (len(existing)!=1 or existing[0]['email']!=OWNER_CONFIG.email or existing[0]['role']!='admin' or not existing[0]['active'] or not binding or not binding['supabase_id'] or not binding['google_sub']):
+                raise RuntimeError('Hosted preview requires an existing active and bound test owner')
+            if OWNER_CONFIG.pin and (binding['supabase_id'],binding['google_sub'])!=OWNER_CONFIG.pin:
+                raise RuntimeError('Hosted preview owner binding mismatch')
+        return
     with tx() as c:
         if OWNER_CONFIG:
             c.execute("""CREATE TABLE IF NOT EXISTS owner_login_identity (
@@ -90,10 +118,14 @@ def home():
         html = html.replace('DEVELOPMENT MODE','OWNER TEST')
         if APP_MODE == 'pg_test':
             html = html.replace('Data uji SQLite terpisah', 'Database PostgreSQL uji • Private Storage uji' if CLOUD_STORAGE else 'Database PostgreSQL uji • kuitansi masih lokal')
+        if HOSTED_PREVIEW:
+            html = html.replace('OWNER LOGIN TEST','HOSTED PREVIEW').replace('OWNER TEST','PREVIEW — DATA SIMULASI')
+            html = html.replace('Owner Login Test','Hosted Preview').replace('Data uji SQLite terpisah','Supabase uji • Jangan gunakan data asli')
+            html = html.replace('Mode uji lokal — gunakan kuitansi contoh saja.','Uji online — gunakan data simulasi saja.')
     return HTMLResponse(html,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
 
 @app.get('/api/health')
-def health():return {'ok':True,'name':'PT Mulia Hakimaco Sejahtera','mode':'POSTGRES TEST LOCAL' if APP_MODE=='pg_test' else ('OWNER TEST LOCAL' if OWNER_CONFIG else 'DEMO LOCAL'),'version':'0.1.0'}
+def health():return {'ok':True,'name':'PT Mulia Hakimaco Sejahtera','mode':'HOSTED PREVIEW — SYNTHETIC ONLY' if HOSTED_PREVIEW else 'POSTGRES TEST LOCAL' if APP_MODE=='pg_test' else ('OWNER TEST LOCAL' if OWNER_CONFIG else 'DEMO LOCAL'),'version':'0.1.0'}
 
 class Login(BaseModel):email:str;password:str
 @app.post('/api/auth/login')
@@ -135,6 +167,7 @@ def google_callback(request:Request,code:str|None=None):
                 if binding['supabase_id']!=supabase_id or binding['google_sub']!=google_sub:
                     raise OwnerAuthError()
             else:
+                if HOSTED_PREVIEW:raise OwnerAuthError()
                 c.execute('INSERT INTO owner_login_identity VALUES (1,?,?)',(supabase_id,google_sub))
             old=request.cookies.get('mhs_session')
             if old:c.execute('DELETE FROM sessions WHERE id_hash=?',(token_hash(old),))
@@ -455,6 +488,8 @@ def receipt(request:Request,document_id:str,version:int|None=None):
             raw = CLOUD_STORAGE.read(v['storage_path'], v['sha256'], v['file_size'])
             headers['Content-Disposition']="inline; filename*=UTF-8''"+quote(v['filename'],safe='')
             return Response(raw,media_type=v['media_type'],headers=headers)
+        if HOSTED_PREVIEW:
+            raise StorageError('Legacy local receipt is available only on original laptop')
         path=legacy_local_path(v['storage_path'],DATA)
     except StorageError:
         raise HTTPException(503,'Kuitansi tidak tersedia atau gagal verifikasi') from None
@@ -722,10 +757,19 @@ def export_report(request:Request,activity_id:str|None=None):
     for cell in ws['B'][1:]:cell.number_format='#,##0.00'
     sums=wb.create_sheet('Summary');sums.append(['Metric','Value']);sums.append(['Approved receipts',len(rows)]);sums.append(['Approved total (IDR)',sum(x['amount_cents'] for x in rows)/100])
     info=wb.create_sheet('Report Info');info.append(['Company','PT Mulia Hakimaco Sejahtera']);info.append(['Snapshot UTC',now()]);info.append(['Scope','all admin data' if u['role']=='admin' else 'own approved data']);info.append(['Activity filter',activity_id or 'ALL']);info.append(['Rule','Only current APPROVED; historic exports immutable'])
-    path=DATA/'exports';path.mkdir(exist_ok=True);key=uid();fname=path/(key+'.xlsx');wb.save(fname)
+    key=uid()
+    if HOSTED_PREVIEW:
+        info.append(['Preview','Download-only snapshot; no server archive in preview'])
+        stream=BytesIO();wb.save(stream);payload=stream.getvalue()
+        location='download-only:sha256:'+hashlib.sha256(payload).hexdigest()
+    else:
+        path=DATA/'exports';path.mkdir(exist_ok=True);fname=path/(key+'.xlsx');wb.save(fname)
+        location=str(fname)
     with tx() as c:
-        c.execute('INSERT INTO export_logs VALUES (?,?,?,?,?,?)',(key,u['id'],'all' if u['role']=='admin' else 'own',js({'activity_id':activity_id}),str(fname),now()))
+        c.execute('INSERT INTO export_logs VALUES (?,?,?,?,?,?)',(key,u['id'],'all' if u['role']=='admin' else 'own',js({'activity_id':activity_id}),location,now()))
         audit(c,u['id'],'REPORT_EXPORTED','export',key,{'count':len(rows),'approved_total_cents':sum(x['amount_cents'] for x in rows)})
+    if HOSTED_PREVIEW:
+        return Response(payload,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="MHS_Approved_Expenses.xlsx"','Cache-Control':'private, no-store'})
     return FileResponse(fname,filename='MHS_Approved_Expenses.xlsx',media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Cache-Control':'private, no-store'})
 
 @app.get('/api/notifications')

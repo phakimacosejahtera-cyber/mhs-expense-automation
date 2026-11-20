@@ -24,6 +24,11 @@ def verify_bucket_metadata(project, env):
     from psycopg.conninfo import conninfo_to_dict
     from .postgres import connect
     try:
+        if env.get("MHS_MODE") == "hosted_preview":
+            from .hosted_preview import preview_database_options
+            preview_database_options(env)
+            with connect() as c:
+                return c.raw.execute("SELECT id, public, file_size_limit, allowed_mime_types FROM mhs_owner_test.preview_bucket_metadata").fetchone()
         options = conninfo_to_dict(env.get("MHS_PG_TEST_DSN", ""))
         host, user = options.get("host", ""), options.get("user", "")
         direct = host == "db."+project+".supabase.co"
@@ -81,6 +86,19 @@ class PrivateStorage:
         size = row.get("file_size_limit")
         if not isinstance(size,int) or not 0<size<=MAX_BYTES or set(row.get("allowed_mime_types") or []) != set(TYPES.values()):
             raise StorageError("Test bucket limits must match receipt configuration")
+
+    def check_preview_scope(self):
+        # Project-wide S3 keys cannot enforce bucket isolation. This is an
+        # additional startup guard, not a security boundary or ongoing monitor.
+        try:
+            self.client.list_objects_v2(Bucket=BUCKET,MaxKeys=1)
+            result=self.client.list_objects_v2(Bucket="receipts-originals",MaxKeys=1)
+            if result.get("KeyCount",0) or result.get("Contents"):
+                raise StorageError("Production bucket must stay empty in single-project preview")
+        except StorageError:
+            raise
+        except Exception:
+            raise StorageError("Cannot verify synthetic-only S3 scope") from None
 
     def put(self,data,ext):
         if ext not in TYPES or not data or len(data)>MAX_BYTES:
@@ -144,9 +162,11 @@ class PrivateStorage:
 def configured_storage(mode,env=None):
     env = os.environ if env is None else env
     setting = env.get("MHS_STORAGE_MODE","local")
+    if mode == "hosted_preview" and setting != "cloud_test":
+        raise StorageError("Hosted preview requires private cloud storage")
     if setting == "local":
         return None
-    if setting != "cloud_test" or mode != "pg_test":
+    if setting != "cloud_test" or mode not in ("pg_test","hosted_preview"):
         raise StorageError("Cloud receipt test requires explicit pg_test mode")
     return PrivateStorage.from_env(env)
 

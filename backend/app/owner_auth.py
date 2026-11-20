@@ -33,7 +33,11 @@ class OwnerConfig:
             raise RuntimeError("Set MHS_SUPABASE_PUBLISHABLE_KEY (publishable key only).")
         if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
             raise RuntimeError("Set MHS_OWNER_EMAIL to the exact owner Google email.")
-        origin = configured_public_origin(os.environ)
+        if os.environ.get("MHS_MODE") == "hosted_preview":
+            from .hosted_preview import preview_origin
+            origin = preview_origin(os.environ)
+        else:
+            origin = configured_public_origin(os.environ)
         return cls(url, key, email, (origin or LOCAL_ORIGIN) + CALLBACK_PATH, owner_pin(os.environ))
 
 
