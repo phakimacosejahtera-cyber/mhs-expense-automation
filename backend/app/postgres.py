@@ -38,7 +38,11 @@ def connect():
     from psycopg.rows import dict_row
     from psycopg.conninfo import conninfo_to_dict
 
-    dsn = os.environ.get("MHS_PG_TEST_DSN", "")
+    preview = os.getenv("MHS_MODE") == "hosted_preview"
+    if preview:
+        from .hosted_preview import preview_database_options, verify_preview_role
+        preview_database_options(os.environ)
+    dsn = os.environ.get("MHS_PG_PREVIEW_DSN" if preview else "MHS_PG_TEST_DSN", "")
     if not dsn:
         raise RuntimeError("MHS_PG_TEST_DSN is required in pg_test mode.")
     try:
@@ -55,7 +59,9 @@ def connect():
     except (psycopg.Error, ValueError):
         raise RuntimeError("Cannot connect to Supabase test database. Check TLS, host and credentials locally.") from None
     try:
-        raw.execute("SET search_path TO mhs_owner_test, pg_catalog")
+        raw.execute("SET search_path TO pg_catalog, mhs_owner_test, pg_temp" if preview else "SET search_path TO mhs_owner_test, pg_catalog")
+        if preview:
+            verify_preview_role(raw)
         raw.execute("SET lock_timeout TO '10s'")
         raw.execute("SET statement_timeout TO '30s'")
     except Exception:
@@ -74,6 +80,11 @@ def transaction(connection):
 
 
 def init_schema():
+    if os.getenv("MHS_MODE") == "hosted_preview":
+        # Never migrate or seed from hosted runtime. Local setup owns DDL.
+        with connect() as c:
+            c.raw.execute("SELECT 1 FROM mhs_owner_test.users LIMIT 1")
+        return
     with connect() as c:
         with transaction(c):
             c.raw.execute("CREATE SCHEMA IF NOT EXISTS mhs_owner_test")
