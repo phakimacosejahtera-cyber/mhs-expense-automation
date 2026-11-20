@@ -2,6 +2,10 @@
 Never deploy this demo configuration on the public internet.
 Rules are enforced server-side; UI alone is NOT an authorization boundary.
 """
+from .runtime import require_local_demo
+
+APP_MODE = require_local_demo()
+
 import os, json, hashlib, secrets, mimetypes, re
 from pathlib import Path
 from datetime import datetime,timedelta,timezone
@@ -16,10 +20,6 @@ from openpyxl.styles import Font,PatternFill,Alignment
 from .db import ROOT,DATA,init_schema,connection,tx,one,allrows,now,uid,js,audit,notify
 from .security import password_hash,verify_password,create_session,get_auth,admin_only,own_or_admin,token_hash
 from .rules import amount_to_cents,risk_reasons,business_due
-
-APP_MODE=os.getenv('MHS_MODE','demo')
-if APP_MODE!='demo':
-    raise RuntimeError('Bundle ini hanya diverifikasi untuk mode demo lokal. Jangan deploy sebagai production.')
 
 app=FastAPI(title='PT Mulia Hakimaco Sejahtera — Expense Automation',version='0.1.0')
 app.mount('/assets',StaticFiles(directory=ROOT/'frontend'/'assets'),name='assets')
