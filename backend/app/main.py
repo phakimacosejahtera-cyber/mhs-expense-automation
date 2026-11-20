@@ -22,11 +22,16 @@ from openpyxl.styles import Font,PatternFill,Alignment
 from .db import ROOT,DATA,init_schema,connection,tx,one,allrows,now,uid,js,audit,notify
 from .security import password_hash,verify_password,create_session,get_auth,admin_only,own_or_admin,token_hash
 from .rules import amount_to_cents,risk_reasons,business_due
+from .receipt_storage import configured_storage, StorageError, PREFIX, legacy_local_path
+from urllib.parse import quote
+CLOUD_STORAGE = configured_storage(APP_MODE)
 
 app=FastAPI(title='PT Mulia Hakimaco Sejahtera — Expense Automation',version='0.1.0')
 app.mount('/assets',StaticFiles(directory=ROOT/'frontend'/'assets'),name='assets')
 
 def startup():
+    if CLOUD_STORAGE:
+        CLOUD_STORAGE.check_private()
     init_schema()
     with tx() as c:
         if OWNER_CONFIG:
@@ -70,7 +75,7 @@ def home():
         html = html.replace('Local Development <small>v0.1 • Data tersimpan di SQLite lokal','Owner Login Test <small>Data uji SQLite terpisah')
         html = html.replace('DEVELOPMENT MODE','OWNER TEST')
         if APP_MODE == 'pg_test':
-            html = html.replace('Data uji SQLite terpisah','Database PostgreSQL uji • kuitansi masih lokal')
+            html = html.replace('Data uji SQLite terpisah', 'Database PostgreSQL uji • Private Storage uji' if CLOUD_STORAGE else 'Database PostgreSQL uji • kuitansi masih lokal')
     return HTMLResponse(html,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
 
 @app.get('/api/health')
@@ -223,6 +228,11 @@ def validate_bytes(filename,data):
     raise HTTPException(422,'Hanya PDF, PNG, JPEG, atau WEBP yang valid')
 
 def store_file(data,ext):
+    if CLOUD_STORAGE:
+        try:
+            return CLOUD_STORAGE.put(data,ext)
+        except StorageError:
+            raise HTTPException(503,'Penyimpanan cloud uji tidak tersedia') from None
     folder=DATA/'private_docs';folder.mkdir(parents=True,exist_ok=True)
     key=uid()+ext;path=folder/key;path.write_bytes(data)
     return str(path)
@@ -232,12 +242,13 @@ async def upload(request:Request,batch_id:str,file:UploadFile=File(...)):
     u=auth(request,True)
     raw=await file.read(MAX_FILE+1)
     mime,ext=validate_bytes(file.filename or '',raw)
-    h=hashlib.sha256(raw).hexdigest();doc=uid();ver=uid();txid=uid();path=store_file(raw,ext)
+    h=hashlib.sha256(raw).hexdigest();doc=uid();ver=uid();txid=uid();path=None
     try:
         with tx() as c:
             b=one(c,'SELECT * FROM upload_batches WHERE id=?',(batch_id,))
             if not b:raise HTTPException(404,'Batch tidak ditemukan')
             own_or_admin(u,b['uploader_id'])
+            path=store_file(raw,ext)
             c.execute('INSERT INTO documents VALUES (?,?,?,?,?)',(doc,b['uploader_id'],batch_id,ver,now()))
             c.execute('INSERT INTO document_versions VALUES (?,?,?,?,?,?,?,?,?)',(ver,doc,1,(file.filename or 'receipt')[:240],mime,h,path,len(raw),now()))
             cats = allrows(c, 'SELECT id, name FROM categories WHERE active=1')
@@ -272,8 +283,10 @@ async def upload(request:Request,batch_id:str,file:UploadFile=File(...)):
             if risks:c.execute('UPDATE transactions SET risk_reasons=? WHERE id=?',(js(risks),txid))
             audit(c,u['id'],'DOCUMENT_UPLOADED','document',doc,{'sha256':h,'filename':file.filename,'duplicate_candidate':bool(dup)})
     except Exception:
-        try:Path(path).unlink(missing_ok=True)
-        except Exception:pass
+        # Keep cloud objects on ambiguous DB failure; reconcile orphans before production.
+        if path and not path.startswith(PREFIX):
+            try:Path(path).unlink(missing_ok=True)
+            except OSError:pass
         raise
     return {'document_id':doc,'transaction_id':txid,'ocr_status':'MANUAL_REQUIRED','risk_reasons':risks}
 
@@ -418,7 +431,18 @@ def receipt(request:Request,document_id:str,version:int|None=None):
         v=one(c,'SELECT * FROM document_versions WHERE document_id=? AND version_number=?',(document_id,version)) if version else one(c,'SELECT * FROM document_versions WHERE id=?',(d['active_version_id'],))
         if not v:raise HTTPException(404,'Versi dokumen tidak ditemukan')
         audit(c,u['id'],'DOCUMENT_OPENED','document',document_id,{'version':v['version_number']})
-    return FileResponse(v['storage_path'],media_type=v['media_type'],filename=v['filename'],content_disposition_type='inline',headers={'Cache-Control':'private, no-store'})
+    headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}
+    try:
+        if v['storage_path'].startswith(PREFIX):
+            if not CLOUD_STORAGE:
+                raise StorageError('Cloud storage is not configured')
+            raw = CLOUD_STORAGE.read(v['storage_path'], v['sha256'], v['file_size'])
+            headers['Content-Disposition']="inline; filename*=UTF-8''"+quote(v['filename'],safe='')
+            return Response(raw,media_type=v['media_type'],headers=headers)
+        path=legacy_local_path(v['storage_path'],DATA)
+    except StorageError:
+        raise HTTPException(503,'Kuitansi tidak tersedia atau gagal verifikasi') from None
+    return FileResponse(path,media_type=v['media_type'],filename=v['filename'],content_disposition_type='inline',headers=headers)
 
 class Decision(BaseModel):decision:str;reason:str|None=None;revision:int|None=None
 @app.get('/api/admin/review-queue')
@@ -498,7 +522,10 @@ async def correction_replacement(request:Request,request_id:str,file:UploadFile=
                       (uid(),t['document_id'],'MANUAL_REQUIRED','NO_OCR_CONFIGURED',js({'replacement_version_id':ver}),now()))
             audit(c,u['id'],'REPLACEMENT_PROPOSED','transaction',t['id'],{'version':num,'request_id':request_id})
         except Exception:
-            Path(path).unlink(missing_ok=True);raise
+            if not path.startswith(PREFIX):
+                try:Path(path).unlink(missing_ok=True)
+                except OSError:pass
+            raise
     return {'version':num,'status':'PENDING_ADMIN_APPROVAL'}
 
 @app.post('/api/admin/corrections/{request_id}/decision')
