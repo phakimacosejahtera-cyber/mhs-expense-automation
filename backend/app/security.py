@@ -30,7 +30,7 @@ def get_auth(req:Request,unsafe=False):
     with connection() as c:
         s=one(c,'SELECT s.*,u.name,u.email,u.role,u.active FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id_hash=?',(token_hash(token),))
     if not s or not s['active'] or s['expires_at']<=now():raise HTTPException(401,'Sesi berakhir, silakan login')
-    if os.getenv('MHS_MODE') in ('owner_test', 'pg_test'):
+    if os.getenv('MHS_MODE') in ('owner_test', 'pg_test', 'hosted_preview'):
         expected = os.getenv('MHS_OWNER_EMAIL', '').strip().lower()
         if not expected or s['email'].lower() != expected or s['role'] != 'admin':
             raise HTTPException(403, 'Akses khusus owner')
