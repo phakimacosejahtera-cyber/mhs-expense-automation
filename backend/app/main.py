@@ -2,9 +2,11 @@
 Never deploy this demo configuration on the public internet.
 Rules are enforced server-side; UI alone is NOT an authorization boundary.
 """
-from .runtime import require_local_demo
+from .runtime import require_local_app
 
-APP_MODE = require_local_demo()
+APP_MODE = require_local_app()
+from .owner_auth import OwnerConfig, OwnerAuthError, new_verifier, authorize_url, exchange_owner
+OWNER_CONFIG = OwnerConfig.from_env() if APP_MODE == 'owner_test' else None
 
 import os, json, hashlib, secrets, mimetypes, re
 from pathlib import Path
@@ -12,7 +14,7 @@ from datetime import datetime,timedelta,timezone
 from io import BytesIO
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,Request,HTTPException,UploadFile,File,Form
-from fastapi.responses import HTMLResponse,FileResponse,Response,StreamingResponse
+from fastapi.responses import HTMLResponse,FileResponse,Response,StreamingResponse,RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel,Field
 from openpyxl import Workbook
@@ -27,9 +29,18 @@ app.mount('/assets',StaticFiles(directory=ROOT/'frontend'/'assets'),name='assets
 def startup():
     init_schema()
     with tx() as c:
+        if OWNER_CONFIG:
+            c.execute("""CREATE TABLE IF NOT EXISTS owner_login_identity (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                supabase_id TEXT NOT NULL, google_sub TEXT NOT NULL
+            )""")
+            existing = allrows(c,'SELECT email,role FROM users')
+            if existing and (len(existing)!=1 or existing[0]['email']!=OWNER_CONFIG.email or existing[0]['role']!='admin'):
+                raise RuntimeError('Owner test database contains unexpected accounts; use a fresh isolated database.')
         if not one(c,'SELECT id FROM users LIMIT 1'):
-            for name,email,role,pw in [
-                ('Admin MHS','admin@mhs.local','admin','AdminDemo123!')]:
+            accounts = [('Owner MHS',OWNER_CONFIG.email,'admin',secrets.token_urlsafe(48))] if OWNER_CONFIG else [
+                ('Admin MHS','admin@mhs.local','admin','AdminDemo123!')]
+            for name,email,role,pw in accounts:
                 c.execute('INSERT INTO users VALUES (?,?,?,?,?,?,?)',(uid(),name,email,password_hash(pw),role,1,now()))
             for cat in ['Transportasi','Konsumsi','Akomodasi','Logistik','ATK','Operasional Lainnya']:
                 c.execute('INSERT INTO categories VALUES (?,?,1)',(uid(),cat))
@@ -46,19 +57,70 @@ async def lifespan(app):
 app.router.lifespan_context=lifespan
 
 @app.get('/',response_class=HTMLResponse)
-def home():return (ROOT/'frontend'/'index.html').read_text(encoding='utf-8')
+def home():
+    html = (ROOT/'frontend'/'index.html').read_text(encoding='utf-8')
+    if OWNER_CONFIG:
+        start = html.index('<form id="login-form">')
+        end = html.index('</div>', html.index('<div class="security-hint">', start)) + len('</div>')
+        html = html[:start] + (
+            '<a class="btn primary full" href="/api/auth/google/start">Masuk dengan Google</a>'
+            '<div class="security-hint">Khusus owner. Mode uji lokal — gunakan kuitansi contoh saja.</div>'
+        ) + html[end:]
+        html = html.replace('LOCAL DEVELOPMENT • V0.1','OWNER LOGIN TEST')
+        html = html.replace('Local Development <small>v0.1 • Data tersimpan di SQLite lokal','Owner Login Test <small>Data uji SQLite terpisah')
+        html = html.replace('DEVELOPMENT MODE','OWNER TEST')
+    return HTMLResponse(html,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
 
 @app.get('/api/health')
-def health():return {'ok':True,'name':'PT Mulia Hakimaco Sejahtera','mode':'DEMO LOCAL','version':'0.1.0'}
+def health():return {'ok':True,'name':'PT Mulia Hakimaco Sejahtera','mode':'OWNER TEST LOCAL' if OWNER_CONFIG else 'DEMO LOCAL','version':'0.1.0'}
 
 class Login(BaseModel):email:str;password:str
 @app.post('/api/auth/login')
 def login(data:Login):
+    if OWNER_CONFIG:raise HTTPException(403,'Gunakan login Google owner')
     with tx() as c:
         u=one(c,'SELECT * FROM users WHERE lower(email)=lower(?) AND active=1',(data.email.strip(),))
         if not u or not verify_password(data.password,u['password_hash']):raise HTTPException(401,'Email atau password salah')
         token,csrf=create_session(c,u['id'])
     resp=Response(content=js({'ok':True,'csrf':csrf}),media_type='application/json')
+    resp.set_cookie('mhs_session',token,httponly=True,samesite='strict',secure=False,path='/',max_age=43200)
+    return resp
+
+@app.get('/api/auth/google/start')
+def google_start(request:Request):
+    if not OWNER_CONFIG:raise HTTPException(404,'Google login tidak aktif')
+    verifier = new_verifier()
+    resp = RedirectResponse(authorize_url(OWNER_CONFIG,verifier),status_code=303,
+                            headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+    resp.set_cookie('mhs_oauth_verifier',verifier,httponly=True,samesite='lax',secure=False,
+                    max_age=600,path='/api/auth/google/callback')
+    return resp
+
+@app.get('/api/auth/google/callback')
+def google_callback(request:Request,code:str|None=None):
+    if not OWNER_CONFIG:raise HTTPException(404,'Google login tidak aktif')
+    denied = RedirectResponse('/?login=denied',status_code=303,
+                              headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+    denied.delete_cookie('mhs_oauth_verifier',path='/api/auth/google/callback')
+    try:
+        supabase_id, google_sub = exchange_owner(OWNER_CONFIG,code,request.cookies.get('mhs_oauth_verifier'))
+        with tx() as c:
+            u=one(c,'SELECT * FROM users WHERE email=? AND role=? AND active=1',(OWNER_CONFIG.email,'admin'))
+            if not u:raise OwnerAuthError()
+            binding=one(c,'SELECT * FROM owner_login_identity WHERE singleton=1')
+            if binding:
+                if binding['supabase_id']!=supabase_id or binding['google_sub']!=google_sub:
+                    raise OwnerAuthError()
+            else:
+                c.execute('INSERT INTO owner_login_identity VALUES (1,?,?)',(supabase_id,google_sub))
+            old=request.cookies.get('mhs_session')
+            if old:c.execute('DELETE FROM sessions WHERE id_hash=?',(token_hash(old),))
+            token,csrf=create_session(c,u['id'])
+            audit(c,u['id'],'OWNER_GOOGLE_LOGIN','user',u['id'])
+    except OwnerAuthError:
+        return denied
+    resp=RedirectResponse('/',status_code=303,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+    resp.delete_cookie('mhs_oauth_verifier',path='/api/auth/google/callback')
     resp.set_cookie('mhs_session',token,httponly=True,samesite='strict',secure=False,path='/',max_age=43200)
     return resp
 
@@ -120,6 +182,7 @@ class UserIn(BaseModel):name:str=Field(min_length=2);email:str;password:str=Fiel
 @app.post('/api/admin/users')
 def create_user(request:Request,data:UserIn):
     u=auth(request,True);admin_only(u)
+    if OWNER_CONFIG:raise HTTPException(403,'Tidak ada akun tambahan pada mode owner')
     if data.role!='uploader':raise HTTPException(403,'MVP demo hanya menyediakan provisioning uploader; admin cadangan sudah disediakan')
     if '@' not in data.email:raise HTTPException(422,'Email tidak valid')
     key=uid()
