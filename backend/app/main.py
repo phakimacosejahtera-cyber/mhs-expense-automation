@@ -65,6 +65,7 @@ def startup():
         CLOUD_STORAGE.check_private()
     init_schema()
     if HOSTED_PREVIEW:
+        CLOUD_STORAGE.check_preview_scope()
         # Reuse only the already initialized synthetic test data and its bound owner.
         with connection() as c:
             existing=allrows(c,'SELECT email,role,active FROM users')
