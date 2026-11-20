@@ -87,6 +87,19 @@ class PrivateStorage:
         if not isinstance(size,int) or not 0<size<=MAX_BYTES or set(row.get("allowed_mime_types") or []) != set(TYPES.values()):
             raise StorageError("Test bucket limits must match receipt configuration")
 
+    def check_preview_scope(self):
+        # Project-wide S3 keys cannot enforce bucket isolation. This is an
+        # additional startup guard, not a security boundary or ongoing monitor.
+        try:
+            self.client.list_objects_v2(Bucket=BUCKET,MaxKeys=1)
+            result=self.client.list_objects_v2(Bucket="receipts-originals",MaxKeys=1)
+            if result.get("KeyCount",0) or result.get("Contents"):
+                raise StorageError("Production bucket must stay empty in single-project preview")
+        except StorageError:
+            raise
+        except Exception:
+            raise StorageError("Cannot verify synthetic-only S3 scope") from None
+
     def put(self,data,ext):
         if ext not in TYPES or not data or len(data)>MAX_BYTES:
             raise StorageError("Invalid receipt size or type")
