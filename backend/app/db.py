@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 import uuid, json
 
 ROOT=Path(__file__).resolve().parents[2]
-DATA=Path(os.getenv('MHS_DATA_DIR', str(ROOT/'storage')))
+DATA = (ROOT/'storage'/'owner-auth-test' if os.getenv('MHS_MODE') == 'owner_test'
+        else Path(os.getenv('MHS_DATA_DIR', str(ROOT/'storage'))))
 DATA.mkdir(parents=True,exist_ok=True)
 DB_FILE=DATA/'mhs_expenses.sqlite3'
 
