@@ -9,10 +9,12 @@ import subprocess
 import sys
 from urllib.parse import quote
 
-from .hosted_preview import ROLE, preview_database_options
+from .hosted_preview import ROLE, preview_database_options, verify_preview_role
 from .postgres import connect, transaction
 from .receipt_storage import PrivateStorage, BUCKET
+import psycopg
 from psycopg import sql
+from psycopg.rows import dict_row
 from psycopg.conninfo import conninfo_to_dict
 
 MUTABLE = ("sessions","activities","categories","upload_batches","documents","document_versions",
@@ -81,7 +83,17 @@ def setup():
             # the copied credential block is invalid and must not be used.
             payload="\n".join(k+"="+v for k,v in values.items())
             subprocess.run(["powershell.exe","-NoProfile","-Command","$input | Set-Clipboard"],input=payload,text=True,check=True,capture_output=True)
-    print("PREVIEW ROLE CREATED; Render environment block copied to clipboard.")
+    # Check the actual restricted login after the creation transaction commits.
+    with psycopg.connect(dsn,sslmode="verify-full",
+            sslrootcert=os.environ["MHS_PG_SSLROOTCERT"],connect_timeout=10,
+            autocommit=True,row_factory=dict_row) as raw:
+        raw.execute("SET search_path TO pg_catalog, mhs_owner_test, pg_temp")
+        verify_preview_role(raw)
+        if not raw.execute("SELECT id FROM mhs_owner_test.preview_bucket_metadata WHERE public=false").fetchone():
+            raise RuntimeError("Restricted login cannot verify private storage")
+        if not raw.execute("SELECT singleton FROM mhs_owner_test.owner_login_identity WHERE singleton=1").fetchone():
+            raise RuntimeError("Restricted login cannot read owner binding")
+    print("PREVIEW ROLE CREATED AND VERIFIED; Render environment block copied to clipboard.")
     print("Paste ONLY into Render Add from .env; do not paste into terminal or chat.")
     print("Add certificate secret file prod-ca-2021.crt separately.")
 
