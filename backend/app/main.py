@@ -6,7 +6,7 @@ from .runtime import require_local_app
 
 APP_MODE = require_local_app()
 from .owner_auth import OwnerConfig, OwnerAuthError, new_verifier, authorize_url, exchange_owner
-OWNER_CONFIG = OwnerConfig.from_env() if APP_MODE == 'owner_test' else None
+OWNER_CONFIG = OwnerConfig.from_env() if APP_MODE in ('owner_test', 'pg_test') else None
 
 import os, json, hashlib, secrets, mimetypes, re
 from pathlib import Path
@@ -69,10 +69,12 @@ def home():
         html = html.replace('LOCAL DEVELOPMENT • V0.1','OWNER LOGIN TEST')
         html = html.replace('Local Development <small>v0.1 • Data tersimpan di SQLite lokal','Owner Login Test <small>Data uji SQLite terpisah')
         html = html.replace('DEVELOPMENT MODE','OWNER TEST')
+        if APP_MODE == 'pg_test':
+            html = html.replace('Data uji SQLite terpisah','Database PostgreSQL uji • kuitansi masih lokal')
     return HTMLResponse(html,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
 
 @app.get('/api/health')
-def health():return {'ok':True,'name':'PT Mulia Hakimaco Sejahtera','mode':'OWNER TEST LOCAL' if OWNER_CONFIG else 'DEMO LOCAL','version':'0.1.0'}
+def health():return {'ok':True,'name':'PT Mulia Hakimaco Sejahtera','mode':'POSTGRES TEST LOCAL' if APP_MODE=='pg_test' else ('OWNER TEST LOCAL' if OWNER_CONFIG else 'DEMO LOCAL'),'version':'0.1.0'}
 
 class Login(BaseModel):email:str;password:str
 @app.post('/api/auth/login')
@@ -263,7 +265,7 @@ async def upload(request:Request,batch_id:str,file:UploadFile=File(...)):
                 (d_ocr.get('notes') or '')[:1000] or None,
                 now(),now()
             ))
-            c.execute('INSERT INTO extraction_runs VALUES (?,?,?,?,?,?)',
+            c.execute('INSERT INTO extraction_runs(id,document_id,status,provider,raw_json,created_at) VALUES (?,?,?,?,?,?)',
                       (uid(),doc,ocr_res['status'],ocr_res['provider'],js(ocr_res['raw']),now()))
             dup=one(c,'SELECT document_id FROM document_versions WHERE sha256=? AND document_id<>? LIMIT 1',(h,doc))
             risks=['Kemungkinan kuitansi duplikat'] if dup else []
@@ -291,7 +293,7 @@ def save_browser_ocr(request:Request,txid:str,data:BrowserOCRObservation):
         own_or_admin(u,t['uploader_id'])
         if t['status']!='DRAFT' or t['deleted_at']:raise HTTPException(409,'OCR hanya dapat disimpan untuk draft aktif')
         run_id=uid()
-        c.execute('INSERT INTO extraction_runs VALUES (?,?,?,?,?,?)',
+        c.execute('INSERT INTO extraction_runs(id,document_id,status,provider,raw_json,created_at) VALUES (?,?,?,?,?,?)',
                   (run_id,t['document_id'],'EXTRACTED','TESSERACT_JS_CLIENT',
                    js({'text':data.text,'confidence':data.confidence,'suggestions':data.suggestions}),now()))
         audit(c,u['id'],'OCR_CLIENT_RECORDED','document',t['document_id'],
@@ -492,7 +494,7 @@ async def correction_replacement(request:Request,request_id:str,file:UploadFile=
             c.execute('INSERT INTO document_versions VALUES (?,?,?,?,?,?,?,?,?)',
                       (ver,t['document_id'],num,(file.filename or 'replacement')[:240],mime,hashlib.sha256(raw).hexdigest(),path,len(raw),now()))
             c.execute('UPDATE correction_requests SET replacement_version_id=? WHERE id=?',(ver,request_id))
-            c.execute('INSERT INTO extraction_runs VALUES (?,?,?,?,?,?)',
+            c.execute('INSERT INTO extraction_runs(id,document_id,status,provider,raw_json,created_at) VALUES (?,?,?,?,?,?)',
                       (uid(),t['document_id'],'MANUAL_REQUIRED','NO_OCR_CONFIGURED',js({'replacement_version_id':ver}),now()))
             audit(c,u['id'],'REPLACEMENT_PROPOSED','transaction',t['id'],{'version':num,'request_id':request_id})
         except Exception:

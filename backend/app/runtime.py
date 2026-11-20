@@ -24,8 +24,8 @@ def require_local_demo(env: Mapping[str, str] | None = None) -> str:
 def require_local_app(env: Mapping[str, str] | None = None) -> str:
     """Allow explicitly selected owner-auth testing, never hosted production."""
     values = os.environ if env is None else env
-    if values.get("MHS_MODE") == "owner_test":
+    if values.get("MHS_MODE") in ("owner_test", "pg_test"):
         if values.get("RENDER", "").strip().lower() == "true" or values.get("RENDER_SERVICE_ID", "").strip():
             raise RuntimeError("Owner authentication test is local only; deployment blocked.")
-        return "owner_test"
+        return values["MHS_MODE"]
     return require_local_demo(values)

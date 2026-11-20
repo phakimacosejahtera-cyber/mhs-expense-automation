@@ -5,11 +5,14 @@ import sqlite3, os
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 import uuid, json
 
 ROOT=Path(__file__).resolve().parents[2]
 DATA = (ROOT/'storage'/'owner-auth-test' if os.getenv('MHS_MODE') == 'owner_test'
         else Path(os.getenv('MHS_DATA_DIR', str(ROOT/'storage'))))
+if os.getenv('MHS_MODE') == 'pg_test':
+    DATA = ROOT/'storage'/'postgres-test'
 DATA.mkdir(parents=True,exist_ok=True)
 DB_FILE=DATA/'mhs_expenses.sqlite3'
 
@@ -22,7 +25,13 @@ class ClosingConnection(sqlite3.Connection):
         try: return super().__exit__(exc_type,exc,tb)
         finally: self.close()
 
+def using_postgres():
+    return os.getenv('MHS_MODE') == 'pg_test'
+
 def connection():
+    if using_postgres():
+        from .postgres import connect
+        return connect()
     conn=sqlite3.connect(DB_FILE,timeout=15,isolation_level=None,check_same_thread=False,factory=ClosingConnection)
     conn.row_factory=sqlite3.Row
     conn.execute('PRAGMA foreign_keys=ON')
@@ -32,6 +41,14 @@ def connection():
 @contextmanager
 def tx():
     c=connection()
+    if using_postgres():
+        from .postgres import transaction
+        try:
+            with transaction(c):
+                yield c
+        finally:
+            c.close()
+        return
     try:
         c.execute('BEGIN IMMEDIATE')
         yield c
@@ -40,10 +57,16 @@ def tx():
         c.rollback();raise
     finally: c.close()
 
-def one(c,sql,params=()):
-    r=c.execute(sql,params).fetchone();return dict(r) if r else None
+def row_dict(row):
+    # PostgreSQL SUM(bigint) returns numeric/Decimal. Keep integer monetary
+    # totals rather than silently serializing them to floating point or strings.
+    return {k: int(v) if isinstance(v, Decimal) and v==v.to_integral_value() else v
+            for k,v in dict(row).items()}
 
-def allrows(c,sql,params=()):return [dict(r) for r in c.execute(sql,params).fetchall()]
+def one(c,sql,params=()):
+    r=c.execute(sql,params).fetchone();return row_dict(r) if r else None
+
+def allrows(c,sql,params=()):return [row_dict(r) for r in c.execute(sql,params).fetchall()]
 
 def audit(c,actor,action,kind,target,details=None):
     c.execute('INSERT INTO audit_logs(id,actor_id,action,target_type,target_id,details,created_at) VALUES (?,?,?,?,?,?,?)',
@@ -54,6 +77,9 @@ def notify(c,who,kind,message,key=None):
               (uid(),who,kind,message,key,now()))
 
 def init_schema():
+    if using_postgres():
+        from .postgres import init_schema as init_pg_schema
+        return init_pg_schema()
     c=connection()
     try:
         c.executescript('''
