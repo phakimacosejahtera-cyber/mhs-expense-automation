@@ -23,11 +23,25 @@ from .db import ROOT,DATA,init_schema,connection,tx,one,allrows,now,uid,js,audit
 from .security import password_hash,verify_password,create_session,get_auth,admin_only,own_or_admin,token_hash
 from .rules import amount_to_cents,risk_reasons,business_due
 from .receipt_storage import configured_storage, StorageError, PREFIX, legacy_local_path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
+from .https_security import apply_security_headers, cookie_secure
+HTTPS_OWNER = cookie_secure(OWNER_CONFIG)
+PUBLIC_ORIGIN = OWNER_CONFIG.callback.rsplit('/api/auth/google/callback',1)[0] if HTTPS_OWNER else None
 CLOUD_STORAGE = configured_storage(APP_MODE)
 
-app=FastAPI(title='PT Mulia Hakimaco Sejahtera — Expense Automation',version='0.1.0')
+app=FastAPI(title='PT Mulia Hakimaco Sejahtera — Expense Automation',version='0.1.0', docs_url=None if OWNER_CONFIG else '/docs', redoc_url=None if OWNER_CONFIG else '/redoc', openapi_url=None if OWNER_CONFIG else '/openapi.json')
 app.mount('/assets',StaticFiles(directory=ROOT/'frontend'/'assets'),name='assets')
+
+@app.middleware('http')
+async def security_boundary(request:Request,call_next):
+    if HTTPS_OWNER:
+        if request.headers.get('host','').lower() != urlsplit(PUBLIC_ORIGIN).netloc:
+            return apply_security_headers(Response('Invalid host',status_code=400),request.url.path,True)
+        if request.method not in ('GET','HEAD','OPTIONS') and request.headers.get('origin') != PUBLIC_ORIGIN:
+            return apply_security_headers(Response('Invalid origin',status_code=403),request.url.path,True)
+    response = await call_next(request)
+    return apply_security_headers(response,request.url.path,HTTPS_OWNER)
+
 
 def startup():
     if CLOUD_STORAGE:
@@ -99,7 +113,7 @@ def google_start(request:Request):
     verifier = new_verifier()
     resp = RedirectResponse(authorize_url(OWNER_CONFIG,verifier),status_code=303,
                             headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
-    resp.set_cookie('mhs_oauth_verifier',verifier,httponly=True,samesite='lax',secure=False,
+    resp.set_cookie('mhs_oauth_verifier',verifier,httponly=True,samesite='lax',secure=HTTPS_OWNER,
                     max_age=600,path='/api/auth/google/callback')
     return resp
 
@@ -108,9 +122,11 @@ def google_callback(request:Request,code:str|None=None):
     if not OWNER_CONFIG:raise HTTPException(404,'Google login tidak aktif')
     denied = RedirectResponse('/?login=denied',status_code=303,
                               headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
-    denied.delete_cookie('mhs_oauth_verifier',path='/api/auth/google/callback')
+    denied.delete_cookie('mhs_oauth_verifier',path='/api/auth/google/callback',secure=HTTPS_OWNER,httponly=True,samesite='lax')
     try:
         supabase_id, google_sub = exchange_owner(OWNER_CONFIG,code,request.cookies.get('mhs_oauth_verifier'))
+        if OWNER_CONFIG.pin is not None and (supabase_id,google_sub) != OWNER_CONFIG.pin:
+            raise OwnerAuthError()
         with tx() as c:
             u=one(c,'SELECT * FROM users WHERE email=? AND role=? AND active=1',(OWNER_CONFIG.email,'admin'))
             if not u:raise OwnerAuthError()
@@ -127,8 +143,8 @@ def google_callback(request:Request,code:str|None=None):
     except OwnerAuthError:
         return denied
     resp=RedirectResponse('/',status_code=303,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
-    resp.delete_cookie('mhs_oauth_verifier',path='/api/auth/google/callback')
-    resp.set_cookie('mhs_session',token,httponly=True,samesite='strict',secure=False,path='/',max_age=43200)
+    resp.delete_cookie('mhs_oauth_verifier',path='/api/auth/google/callback',secure=HTTPS_OWNER,httponly=True,samesite='lax')
+    resp.set_cookie('mhs_session',token,httponly=True,samesite='strict',secure=HTTPS_OWNER,path='/',max_age=43200)
     return resp
 
 @app.get('/api/me')
@@ -138,7 +154,7 @@ def me(request:Request):return get_auth(request)
 def logout(request:Request):
     u=get_auth(request,True)
     with tx() as c:c.execute('DELETE FROM sessions WHERE id_hash=?',(token_hash(request.cookies['mhs_session']),))
-    resp=Response(content=js({'ok':True}),media_type='application/json');resp.delete_cookie('mhs_session',path='/');return resp
+    resp=Response(content=js({'ok':True}),media_type='application/json');resp.delete_cookie('mhs_session',path='/',secure=HTTPS_OWNER,httponly=True,samesite='strict');return resp
 
 def auth(request:Request,write=False):return get_auth(request,unsafe=write)
 
@@ -695,7 +711,7 @@ def export_report(request:Request,activity_id:str|None=None):
     wb=Workbook();ws=wb.active;ws.title='Transactions'
     heads=['Date','Amount (IDR)','Description','Vendor','Category','Payment Method','Invoice Number','Uploader','Receipt Link','Notes','Transaction ID','Activity']
     ws.append(heads)
-    base=str(request.base_url).rstrip('/')
+    base=PUBLIC_ORIGIN or 'http://127.0.0.1:8000'
     for r in rows:
         ws.append([safe_excel(r['transaction_date']),r['amount_cents']/100,safe_excel(r['description']),safe_excel(r['vendor']),
                    safe_excel(r['category_name']),safe_excel(r['payment_method']),safe_excel(r['invoice_number']),
