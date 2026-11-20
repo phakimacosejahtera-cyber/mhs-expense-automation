@@ -7,6 +7,7 @@ import secrets
 from dataclasses import dataclass
 from urllib.parse import urlencode
 import httpx
+from .https_security import configured_public_origin, owner_pin, CALLBACK_PATH, LOCAL_ORIGIN
 
 
 class OwnerAuthError(Exception):
@@ -18,7 +19,8 @@ class OwnerConfig:
     url: str
     key: str
     email: str
-    callback: str = "http://127.0.0.1:8000/api/auth/google/callback"
+    callback: str = LOCAL_ORIGIN + CALLBACK_PATH
+    pin: tuple[str, str] | None = None
 
     @classmethod
     def from_env(cls):
@@ -31,7 +33,8 @@ class OwnerConfig:
             raise RuntimeError("Set MHS_SUPABASE_PUBLISHABLE_KEY (publishable key only).")
         if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
             raise RuntimeError("Set MHS_OWNER_EMAIL to the exact owner Google email.")
-        return cls(url, key, email)
+        origin = configured_public_origin(os.environ)
+        return cls(url, key, email, (origin or LOCAL_ORIGIN) + CALLBACK_PATH, owner_pin(os.environ))
 
 
 def new_verifier():
@@ -79,7 +82,7 @@ def exchange_owner(config, code, verifier, client=None):
     if not isinstance(verifier, str) or not re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", verifier):
         raise OwnerAuthError()
     owns_client = client is None
-    client = client or httpx.Client(timeout=10, follow_redirects=False)
+    client = client or httpx.Client(timeout=10, follow_redirects=False, trust_env=False)
     try:
         headers = {"apikey": config.key}
         exchange = client.post(config.url + "/auth/v1/token", params={"grant_type": "pkce"},
@@ -92,7 +95,10 @@ def exchange_owner(config, code, verifier, client=None):
         result = client.get(config.url + "/auth/v1/user",
                             headers={**headers, "Authorization": "Bearer " + token})
         result.raise_for_status()
-        return verified_owner(result.json(), config.email)
+        identity = verified_owner(result.json(), config.email)
+        if config.pin is not None and identity != config.pin:
+            raise OwnerAuthError()
+        return identity
     except (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError):
         raise OwnerAuthError() from None
     finally:
