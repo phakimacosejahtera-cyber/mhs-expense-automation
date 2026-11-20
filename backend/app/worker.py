@@ -1,6 +1,11 @@
 """Idempotent local background worker. Run in a separate process: python -m backend.app.worker.
 Jobs are intentionally simple in V0.1. Provisional SLA never enables automatic escalation.
 """
+from .runtime import require_local_demo
+
+if __name__ == '__main__':
+    require_local_demo()
+
 import json, time, sys
 from datetime import datetime,timezone
 from pathlib import Path
@@ -28,6 +33,7 @@ def escalate_reinstatement(c,r,actor=None,reason='SLA FINAL melebihi 24 jam kerj
 
 
 def run_once():
+    require_local_demo()
     stats={'escalated':0,'blocked':0,'provisional_reminders':0,'purged_drafts':0}
     paths=[]
     with tx() as c:
