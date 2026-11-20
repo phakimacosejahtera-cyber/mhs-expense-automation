@@ -24,6 +24,11 @@ def verify_bucket_metadata(project, env):
     from psycopg.conninfo import conninfo_to_dict
     from .postgres import connect
     try:
+        if env.get("MHS_MODE") == "hosted_preview":
+            from .hosted_preview import preview_database_options
+            preview_database_options(env)
+            with connect() as c:
+                return c.raw.execute("SELECT id, public, file_size_limit, allowed_mime_types FROM mhs_owner_test.preview_bucket_metadata").fetchone()
         options = conninfo_to_dict(env.get("MHS_PG_TEST_DSN", ""))
         host, user = options.get("host", ""), options.get("user", "")
         direct = host == "db."+project+".supabase.co"
@@ -144,9 +149,11 @@ class PrivateStorage:
 def configured_storage(mode,env=None):
     env = os.environ if env is None else env
     setting = env.get("MHS_STORAGE_MODE","local")
+    if mode == "hosted_preview" and setting != "cloud_test":
+        raise StorageError("Hosted preview requires private cloud storage")
     if setting == "local":
         return None
-    if setting != "cloud_test" or mode != "pg_test":
+    if setting != "cloud_test" or mode not in ("pg_test","hosted_preview"):
         raise StorageError("Cloud receipt test requires explicit pg_test mode")
     return PrivateStorage.from_env(env)
 
