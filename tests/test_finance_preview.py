@@ -69,6 +69,20 @@ with TestClient(app) as c:
     assert wb['Ringkasan']['B5'].value==300000
     assert wb['Pemasukan']['B2'].data_type!='f'
     assert wb['Pengeluaran']['I2'].hyperlink
+    assert 'MHS_Pemasukan' in wb['Pemasukan'].tables
+    assert 'MHS_Pengeluaran' in wb['Pengeluaran'].tables
+    assert 'MHS_Transaksi' in wb['Semua Transaksi'].tables
+    assert 'SUMIFS(' in wb['Ringkasan']['B13'].value
+    assert 'SUMIFS(' in wb['Ringkasan']['C13'].value
+    assert 'SUBTOTAL(109,' in wb['Pemasukan']['C5'].value
+    assert wb['Ringkasan']['B27'].value=='=ROUND(B25-B3,2)'
+    empty=c.get('/api/finance/export?year=2025&month=2')
+    assert empty.status_code==200,empty.text
+    empty_wb=load_workbook(BytesIO(empty.content))
+    assert empty_wb['Ringkasan']['B3'].value==0
+    assert empty_wb['Pemasukan'].tables['MHS_Pemasukan'].ref=='A1:E2'
+    assert empty_wb['Ringkasan']['A13'].value=='Februari'
+
     assert post('/api/admin/users',{'name':'Fixture Uploader','email':'fixture@example.invalid','password':'FixturePassword123','role':'uploader'}).status_code==200
     with TestClient(app) as other:
         assert other.post('/api/auth/login',json={'email':'fixture@example.invalid','password':'FixturePassword123'}).status_code==200
