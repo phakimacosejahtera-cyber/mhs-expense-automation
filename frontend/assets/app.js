@@ -41,11 +41,19 @@ async function nav(page){
  }catch(e){toast(e.message,true);$('#page-content').innerHTML=`<div class="notice danger-notice">${h(e.message)}</div>`}
 }
 async function loadTx(){state.transactions=await json('/transactions');return state.transactions}
+let financeYear=new Date().getFullYear(), financeMonth=0;
 async function dashboard(){
  setHead('Dashboard','Ringkasan keuangan dan status pencatatan bukti transaksi');
- const [d,rows]=await Promise.all([json('/dashboard'),loadTx()]);
  const isAdmin=state.me.role==='admin';
- const drafts=rows.filter(t=>t.status==='DRAFT').length;
+ const health=await json('/health');
+ const finance=isAdmin && health.mode==='DEMO LOCAL';
+ const [d,allTx]=await Promise.all([json(finance?'/finance/summary?year='+financeYear+(financeMonth?'&month='+financeMonth:''):'/dashboard'),loadTx()]);
+ if(state.page!=='dashboard')return;
+ const rows=finance?allTx.filter(t=>t.transaction_date>=d.start && t.transaction_date<d.end_exclusive):allTx;
+ const scope=finance?(financeMonth?String(financeMonth).padStart(2,'0')+'/'+financeYear:String(financeYear)):'Seluruh periode';
+ const months=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+ const maxBar=Math.max(1,...(d.monthly_income||[]),...(d.monthly_expense||[]));
+ const drafts=finance?d.drafts:rows.filter(t=>t.status==='DRAFT').length;
  const pending=d.pending_review||0;
  const shortRp=cents=>{
    const val=(cents||0)/100;
@@ -71,8 +79,9 @@ async function dashboard(){
 
  $('#page-content').innerHTML=`
  <div class="dash-toolbar">
-   <div><h2>Ringkasan keuangan</h2><p>Seluruh periode tercatat · pengeluaran disetujui saja</p></div>
+   <div><h2>Ringkasan keuangan</h2><p>${h(scope)} · pengeluaran disetujui saja</p></div>
    <div class="dash-toolbar-actions">
+     ${finance?`<label class="finance-filter">Tahun <input id="finance-year" type="number" min="1900" max="9998" value="${financeYear}" aria-label="Tahun laporan"></label><label class="finance-filter">Bulan <select id="finance-month"><option value="0">Semua</option>${months.map((m,i)=>`<option value="${i+1}" ${financeMonth===i+1?'selected':''}>${m}</option>`).join('')}</select></label>`:''}
      <button class="btn primary" data-nav="upload">+ Upload Bukti</button>
      <button class="btn outline" data-nav="reports">Laporan Excel</button>
    </div>
@@ -87,8 +96,8 @@ async function dashboard(){
      <div class="dash-val">${fmtRp(d.income_cents||0)}</div>
      <div class="dash-meta">
        <span class="tag-pill tag-in">↗ Dana masuk</span>
-       <span>Nilai global manual</span>
-       ${isAdmin?'<button class="edit-income-btn" id="btn-set-income">Atur</button>':''}
+       <span>${finance?`${d.income_count} transaksi`:'Nilai global manual'}</span>
+       ${isAdmin?`<button class="edit-income-btn" id="btn-set-income">${finance?'+ Catat':'Atur'}</button>`:''}
      </div>
    </div>
 
@@ -116,12 +125,16 @@ async function dashboard(){
    </div>
  </div>
 
+ ${finance && d.legacy_income_cents? `<div class="notice mt">Dana masuk lama tanpa tanggal: ${fmtRp(d.legacy_income_cents)}. Tidak dihitung dalam laporan periode. Nilai lama tetap tersimpan.</div>`:''}
+ ${finance?`<section class="dash-card mt"><div class="chart-header"><div><h3>Arus Kas ${h(scope)}</h3><small>Pemasukan tercatat dan pengeluaran disetujui</small></div><div class="chart-legend"><span><i class="dot-sq" style="background:#14b8a6"></i>Pemasukan</span><span><i class="dot-sq" style="background:#f4831e"></i>Pengeluaran</span></div></div>
+ <div class="bar-chart-wrap" aria-label="Grafik arus kas"><div class="bar-grid-lines"><span></span><span></span><span></span><span></span></div><div class="bars-row">${months.map((m,i)=>{const inc=d.monthly_income[i],out=d.monthly_expense[i];return `<div class="month-col"><div class="bar-pair"><div class="bar-in" style="height:${Math.round(inc/maxBar*145)}px;min-height:0" title="${m}: ${fmtRp(inc)}"></div><div class="bar-out" style="height:${Math.round(out/maxBar*145)}px;min-height:0;background:#f4831e" title="${m}: ${fmtRp(out)}"></div></div><span class="month-lbl">${m}</span></div>`}).join('')}</div></div>
+ <p class="tiny muted">Grafik mengikuti periode pilihan. Arahkan kursor ke batang untuk nominal.</p></section>`:''}
  <div class="analytics-grid">
    <section class="dash-card dash-work-panel">
      <div class="chart-header"><div><h3>Perlu perhatian</h3><small>Selesaikan pencatatan sebelum masuk laporan</small></div></div>
      <div class="dash-work-row"><div><strong>Draft kuitansi</strong><small>Belum diajukan untuk pemeriksaan</small></div><b>${drafts}</b><button class="btn outline" data-nav="upload">Periksa</button></div>
      ${isAdmin?`<div class="dash-work-row"><div><strong>Menunggu review</strong><small>Belum masuk total pengeluaran</small></div><b>${pending}</b><button class="btn outline" data-nav="reviews">Review</button></div>`:`<div class="dash-work-row"><div><strong>Menunggu review</strong><small>Belum masuk total pengeluaran</small></div><b>${pending}</b></div>`}
-     <p class="dash-period-note">Grafik bulanan akan tersedia setelah pencatatan pemasukan dan filter tahun divalidasi. Ringkasan di atas belum difilter berdasarkan tahun.</p>
+     <p class="dash-period-note">${finance?'Antrean draft dan review mencakup semua periode.':'Grafik bulanan tersedia hanya pada preview lokal; ringkasan ini belum difilter berdasarkan tahun.'}</p>
    </section>
 
    <section class="dash-card">
@@ -130,7 +143,7 @@ async function dashboard(){
          <h3>Pengeluaran Terbesar</h3>
          <small>Distribusi berdasarkan kategori</small>
        </div>
-       <span class="year-badge">Semua periode</span>
+       <span class="year-badge">${h(scope)}</span>
      </div>
      <div class="donut-box">
        <div class="donut-svg-wrap">
@@ -154,10 +167,12 @@ async function dashboard(){
    </section>
  </div>
 
+ ${finance?`<section class="dash-card mt"><div class="chart-header"><div><h3>Riwayat Pemasukan</h3><small>Catatan dana masuk pada periode pilihan</small></div></div>
+ ${d.incomes.length?`<div class="tablescroll"><table class="data-table"><thead><tr><th>Tanggal</th><th>Keterangan</th><th>Pengirim</th><th>Nominal</th><th>Status</th><th>Aksi</th></tr></thead><tbody>${d.incomes.map(i=>`<tr><td>${h(i.transaction_date)}</td><td>${h(i.description)}</td><td>${h(i.sender||'—')}</td><td>${fmtRp(i.amount_cents)}</td><td>${pill(i.reversed_at?'REVERSED':'APPROVED')}</td><td>${i.reversed_at?h(i.reversal_reason):`<button class="btn danger" data-income-reverse="${h(i.id)}">Batalkan</button>`}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Belum ada pemasukan pada periode ini.</div>'}</section>`:''}
  <section class="dash-card mt">
    <div class="chart-header" style="margin-bottom:10px">
      <div>
-       <h3>Transaksi Terbaru</h3>
+       <h3>Pengeluaran Terbaru</h3>
        <small>Aktivitas keuangan yang terakhir dicatat</small>
      </div>
      <button class="btn outline" style="border:none;color:#10b981;font-weight:700" data-nav="transactions">Lihat semua →</button>
@@ -178,8 +193,20 @@ async function dashboard(){
    </table></div>`:'<div class="empty">Belum ada transaksi tercatat.</div>'}
  </section>`;
 
+ if(finance){
+   $('#finance-year').onchange=async e=>{const y=Number(e.target.value);if(!Number.isInteger(y)||y<1900||y>9998){e.target.value=financeYear;return toast('Tahun tidak valid',true)}financeYear=y;await nav('dashboard')};
+   $('#finance-month').onchange=async e=>{financeMonth=Number(e.target.value);await nav('dashboard')};
+   document.querySelectorAll('[data-income-reverse]').forEach(btn=>btn.onclick=async()=>{const reason=prompt('Alasan pembatalan pemasukan (minimal 5 karakter):');if(!reason)return;if(!confirm('Batalkan pemasukan ini? Histori tetap tersimpan.'))return;btn.disabled=true;try{await post('/finance/income/'+btn.dataset.incomeReverse+'/reverse',{reason});await nav('dashboard')}catch(e){toast(e.message,true);btn.disabled=false}});
+ }
  const incBtn=$('#btn-set-income');
  if(incBtn)incBtn.onclick=async()=>{
+   if(finance){
+     const requestId=crypto.randomUUID();
+     const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jakarta',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+     modal('Catat Pemasukan',`<form id="income-form" class="grid2">${field('Tanggal','transaction_date',today,'date',true)}${field('Nominal (rupiah, tanpa pemisah)','amount','','number',true,'min="1" max="999999999999" step="1"')}${field('Keterangan','description','','text',true,'maxlength="500"')}${field('Transfer dari / pengirim','sender','','text',false,'maxlength="200"')}<div><button class="btn primary" type="submit">Simpan Pemasukan</button></div></form><p class="tiny muted">Catat dana yang benar-benar diterima. Gunakan data simulasi saja.</p>`);
+     $('#income-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;const data=Object.fromEntries(new FormData(form));const amt=Number(data.amount);if(!Number.isSafeInteger(amt)||amt<=0||amt>999999999999)return toast('Nominal tidak valid',true);const btn=form.querySelector('button');btn.disabled=true;try{await post('/finance/income',{request_id:requestId,transaction_date:data.transaction_date,amount_cents:amt*100,description:data.description,sender:data.sender});closeModal();toast('Pemasukan tercatat');financeYear=Number(data.transaction_date.slice(0,4));financeMonth=0;await nav('dashboard')}catch(err){toast(err.message,true);btn.disabled=false}};
+     return;
+   }
    const raw=prompt('Masukkan total pemasukan / anggaran kas (IDR), contoh: 100000000', String((d.income_cents||0)/100));
    if(raw===null)return;
    const num=Number(raw.replace(/[^0-9.]/g,''));
