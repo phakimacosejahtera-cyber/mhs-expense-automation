@@ -597,7 +597,7 @@ def review_queue(request:Request):
     with connection() as c:
         return {
          'transactions':allrows(c,"SELECT t.*,us.name uploader_name FROM transactions t JOIN users us ON us.id=t.uploader_id WHERE status='PENDING_REVIEW' ORDER BY submitted_at LIMIT 200"),
-         'corrections':allrows(c,"SELECT r.*,t.description FROM correction_requests r JOIN transactions t ON t.id=r.transaction_id WHERE r.status='PENDING' ORDER BY r.created_at LIMIT 200"),
+         'corrections':allrows(c,"SELECT r.*,t.description,v.version_number AS replacement_version_number FROM correction_requests r JOIN transactions t ON t.id=r.transaction_id LEFT JOIN document_versions v ON v.id=r.replacement_version_id AND v.document_id=t.document_id WHERE r.status='PENDING' ORDER BY r.created_at LIMIT 200"),
          'reinstatements':allrows(c,"SELECT r.*,t.description FROM reinstatement_requests r JOIN transactions t ON t.id=r.transaction_id WHERE r.status='PENDING' ORDER BY r.created_at LIMIT 200")}
 
 @app.post('/api/admin/transactions/{txid}/decision')
