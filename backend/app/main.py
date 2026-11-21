@@ -106,7 +106,20 @@ def startup():
 @asynccontextmanager
 async def lifespan(app):
     startup()
-    yield
+    stop = worker = None
+    if APP_MODE == 'demo' and CLOUD_STORAGE is None and os.getenv('MHS_AUTO_BACKUP') == '1':
+        import threading
+        from .backup_local import daily_loop
+        stop = threading.Event()
+        worker = threading.Thread(target=daily_loop, args=(DATA, stop), daemon=True, name='mhs-backup')
+        worker.start()
+    try:
+        yield
+    finally:
+        if stop is not None:
+            stop.set()
+            await run_in_threadpool(worker.join, 5)
+
 
 app.router.lifespan_context=lifespan
 
@@ -197,6 +210,47 @@ def logout(request:Request):
     resp=Response(content=js({'ok':True}),media_type='application/json');resp.delete_cookie('mhs_session',path='/',secure=HTTPS_OWNER,httponly=True,samesite='strict');return resp
 
 def auth(request:Request,write=False):return get_auth(request,unsafe=write)
+
+# Local preview only. Recovery never overwrites the running database.
+if APP_MODE == 'demo' and CLOUD_STORAGE is None:
+    from . import backup_local as backup
+    from starlette.background import BackgroundTask
+    import tempfile
+    import shutil
+
+    @app.get('/api/admin/backup/status')
+    def backup_status(request:Request):
+        admin_only(auth(request))
+        items = backup.daily_archives(DATA)
+        return {'automatic':os.getenv('MHS_AUTO_BACKUP')=='1',
+                'state':backup.DAILY_STATUS['state'],
+                'latest':items[0].name if items else None,'count':len(items)}
+
+    @app.post('/api/admin/backup/download')
+    def backup_download(request:Request):
+        admin_only(auth(request,True))
+        work=Path(tempfile.mkdtemp(prefix='mhs-download-',dir=backup.backup_directory(DATA)))
+        path=work/'MHS_Backup.zip'
+        try:
+            backup.create_backup(DATA,path)
+        except Exception:
+            shutil.rmtree(work,ignore_errors=True)
+            raise HTTPException(503,'Backup belum berhasil. Periksa penyimpanan dan integritas dokumen.') from None
+        return FileResponse(path,filename='MHS_Backup_'+datetime.now().strftime('%Y%m%d-%H%M%S')+'.zip',
+                            media_type='application/zip',headers={'Cache-Control':'private, no-store'},
+                            background=BackgroundTask(shutil.rmtree,work,ignore_errors=True))
+
+    @app.post('/api/admin/backup/recover-latest')
+    def backup_recover_latest(request:Request):
+        admin_only(auth(request,True))
+        items=backup.daily_archives(DATA)
+        if not items:raise HTTPException(404,'Belum ada backup harian.')
+        target=DATA.resolve().parent/('mhs-recovery-'+uid())
+        try:
+            result=backup.restore_backup(items[0],target)
+        except Exception:
+            raise HTTPException(422,'Cadangan tidak dapat dipulihkan. Data aktif tidak berubah.') from None
+        return {'created_at':result['created_at'],'files':result['files'],'folder':target.name}
 
 @app.get('/api/config')
 def config(request:Request):
