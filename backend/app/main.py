@@ -60,10 +60,17 @@ async def security_boundary(request:Request,call_next):
     return apply_security_headers(response,request.url.path,HTTPS_OWNER)
 
 
+if APP_MODE == 'demo':
+    from . import finance_preview
+    app.include_router(finance_preview.router)
+
+
 def startup():
     if CLOUD_STORAGE:
         CLOUD_STORAGE.check_private()
     init_schema()
+    if APP_MODE == 'demo':
+        finance_preview.initialize()
     if HOSTED_PREVIEW:
         CLOUD_STORAGE.check_preview_scope()
         # Reuse only the already initialized synthetic test data and its bound owner.
@@ -680,6 +687,7 @@ class BudgetIn(BaseModel):
 @app.post('/api/dashboard/income')
 def set_dashboard_income(request:Request, data:BudgetIn):
     u=auth(request,True)
+    admin_only(u)
     with tx() as c:
         c.execute('''CREATE TABLE IF NOT EXISTS app_settings(
             key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
