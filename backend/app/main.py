@@ -409,15 +409,27 @@ def run_paddle_ocr(request:Request,txid:str,data:PaddleRunIn):
         if data.browser_run_id and not one(c,"SELECT id FROM extraction_runs WHERE id=? AND document_id=? AND provider='TESSERACT_JS_CLIENT'",(data.browser_run_id,t['document_id'])):
             raise HTTPException(422,'Hasil OCR pembanding tidak ditemukan')
     if not v:raise HTTPException(404,'Dokumen tidak ditemukan')
+    import logging
+    logger=logging.getLogger("uvicorn.error")
+    stage="STORAGE_PATH"
     try:
         path=legacy_local_path(v['storage_path'],DATA)
-        if path.stat().st_size>8*1024*1024:raise ValueError()
+        stage="FILE_SIZE"
+        if not 0<path.stat().st_size<=8*1024*1024:raise ValueError()
         raw=path.read_bytes()
-        if len(raw)!=v['file_size'] or hashlib.sha256(raw).hexdigest()!=v['sha256']:raise ValueError()
+        if len(raw)!=v['file_size']:raise ValueError()
+        stage="FILE_HASH"
+        if hashlib.sha256(raw).hexdigest()!=v['sha256']:raise ValueError()
+        stage="PADDLE_WORKER"
+        logger.info("PaddleOCR: receipt integrity verified; starting local worker")
         result=paddle_local.recognize(raw,v['media_type'])
         if not result:raise ValueError()
-    except Exception:
-        return {'status':'FAILED','message':'PaddleOCR gagal atau sibuk; periksa hasil Tesseract atau isi manual'}
+    except Exception as exc:
+        code=getattr(exc,"code",None) if stage=="PADDLE_WORKER" else None
+        code=code or stage
+        logger.warning("PaddleOCR failed: stage=%s code=%s exception=%s",stage,code,type(exc).__name__)
+        return {'status':'FAILED','error_code':code,'message':'PaddleOCR gagal ('+code+'); periksa hasil Tesseract atau isi manual'}
+    logger.info("PaddleOCR: local worker completed; recording unverified evidence")
     with tx() as c:
         current=one(c,'SELECT t.status,t.deleted_at,d.active_version_id FROM transactions t JOIN documents d ON d.id=t.document_id WHERE t.id=?',(txid,))
         if not current or current['deleted_at'] or current['status']!='DRAFT' or current['active_version_id']!=v['id']:
