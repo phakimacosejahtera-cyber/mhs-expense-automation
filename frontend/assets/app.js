@@ -821,9 +821,38 @@ function storageIssues(d){
  const issues=[];
  const fields=[['missing_receipt_versions','versi kuitansi tidak ditemukan'],['receipt_size_mismatches','versi kuitansi berbeda ukuran'],['missing_exports','arsip Excel tidak ditemukan'],['duplicate_hash_groups','kelompok kuitansi identik (periksa kemungkinan pencatatan ganda)'],['unlinked_receipt_files','file kuitansi tanpa referensi'],['unlinked_export_files','file Excel tanpa referensi'],['temporary_upload_files','file upload sementara tertinggal'],['scan_warnings','kendala saat pemeriksaan']];
  for(const [key,label] of fields)if(Number(d[key])>0)issues.push(Number(d[key])+' '+label);
- if(Number(d.disk_free_bytes)<1024**3)issues.push('Sisa ruang disk kurang dari 1 GiB');
+ if(Number(d.disk_free_bytes)<2*1024**3)issues.push('Sisa ruang disk kurang dari 2 GiB; kosongkan ruang di luar folder data MHS.');
  return issues;
 }
+
+function storageChartModel(d){
+ const bytes=v=>{const n=Number(v);return Number.isFinite(n)&&n>=0?n:0};
+ const rows=[['Dokumen kuitansi',bytes(d.receipt_bytes),'#f4831e'],['Database',bytes(d.database_bytes),'#4775b5'],['Arsip Excel',bytes(d.export_bytes),'#0d9488'],['Backup harian',bytes(d.daily_backup_bytes),'#8b70b3']];
+ const total=rows.reduce((sum,r)=>sum+r[1],0);
+ const free=bytes(d.disk_free_bytes),capacity=bytes(d.disk_total_bytes);
+ const used=capacity?Math.min(100,Math.max(0,(1-free/capacity)*100)):null;
+ return {rows:rows.map(([name,size,color])=>({name,size,color,pct:total?size/total*100:0})),total,free,capacity,used};
+}
+function renderStorageOverview(d){
+ const m=storageChartModel(d),issues=storageIssues(d);
+ const percent=n=>new Intl.NumberFormat('id-ID',{maximumFractionDigits:1}).format(n)+'%';
+ const low=m.free<2*1024**3, diskColor=low?'#c07817':'#16845b';
+ const segment=m.rows.map(r=>'<span style="width:'+r.pct+'%;background:'+r.color+';" title="'+h(r.name+' — '+storageSize(r.size))+'"></span>').join('');
+ const legend=m.rows.map(r=>'<div class="storage-legend-row"><i style="background:'+r.color+'"></i><span>'+h(r.name)+'</span><b>'+h(storageSize(r.size))+'</b><span class="storage-pct">'+h(percent(r.pct))+'</span></div>').join('');
+ return `<div class="storage-overview">
+ <div class="storage-kpis">
+ <div class="storage-kpi" style="--storage-accent:#f4831e"><small>Ukuran data utama</small><strong>${h(storageSize(m.total))}</strong><span>Data dan cadangan harian</span></div>
+ <div class="storage-kpi" style="--storage-accent:${diskColor}"><small>Sisa ruang disk</small><strong style="color:${diskColor}">${h(storageSize(m.free))}</strong><span>${low?'Kapasitas mulai terbatas':'Ruang tersedia'}</span></div>
+ <div class="storage-kpi" style="--storage-accent:#4775b5"><small>Versi kuitansi</small><strong>${h(d.receipt_versions)}</strong><span>${h(d.daily_backup_count)} cadangan harian</span></div>
+ </div>
+ <div class="storage-chart"><h4>Komposisi penyimpanan</h4><p>Proporsi ukuran data utama aplikasi</p><div class="storage-stack" aria-hidden="true">${segment}</div><div class="storage-legend">${legend}</div></div>
+ <div class="storage-chart"><h4>Kapasitas disk perangkat</h4><p>Total penggunaan disk, termasuk file di luar MHS.</p>
+ ${m.used===null?'<p>Kapasitas total tidak tersedia.</p>':`<div class="storage-disk-meta"><b>${h(percent(m.used))} terpakai</b><span>Total ${h(storageSize(m.capacity))}</span></div><div class="storage-meter" aria-hidden="true"><span style="width:${m.used}%;background:${diskColor}"></span></div><div class="storage-disk-meta"><span>Ruang tersedia</span><b>${h(storageSize(m.free))}</b></div>`}
+ </div>
+ ${issues.length?'<div class="notice"><b>Perlu perhatian</b><ul>'+issues.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul><p>Hubungi pengelola jika ada dokumen hilang atau file tidak sesuai. Tidak ada file yang dihapus.</p></div>':'<div class="notice good-notice">Tidak ada masalah ukuran atau referensi yang terdeteksi.</div>'}
+ <p class="tiny muted">Pemeriksaan metadata, bukan verifikasi isi setiap file. Ukuran tidak mencakup seluruh folder project atau salinan pemulihan terpisah.</p></div>`;
+}
+
 function setupStoragePanel(){
  const panel=$('#storage-panel');if(!panel)return;
  panel.innerHTML='<h3>Penyimpanan Data</h3><p class="tiny muted">Periksa ukuran database, kuitansi, laporan dan cadangan. Tidak menghapus file.</p><button class="btn outline" id="storage-check">Periksa Penyimpanan</button><div id="storage-result" role="status" class="mt"></div>';
@@ -832,10 +861,7 @@ function setupStoragePanel(){
    btn.disabled=true;result.textContent='Memeriksa penyimpanan…';
    try{
      const d=await json('/admin/storage/status');if(!panel.isConnected)return;
-     const rows=[['Database',d.database_bytes],['Kuitansi (termasuk file sementara)',d.receipt_bytes],['Arsip Excel',d.export_bytes],['Backup harian',d.daily_backup_bytes]];
-     const total=rows.reduce((sum,x)=>sum+Number(x[1]),0);
-     const issues=storageIssues(d);
-     result.innerHTML=`<div class="hint"><b>Ukuran data utama: ${h(storageSize(total))}</b><p class="tiny">Sisa ruang disk: ${h(storageSize(d.disk_free_bytes))} · ${h(d.receipt_versions)} versi kuitansi</p><table class="small-table">${rows.map(([name,size])=>'<tr><td>'+h(name)+'</td><td>'+h(storageSize(size))+'</td></tr>').join('')}</table></div>${issues.length?'<div class="notice mt"><b>Perlu perhatian</b><ul>'+issues.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul><p>Hubungi pengelola jika ada dokumen hilang atau file tidak sesuai. Tidak ada file yang dihapus.</p></div>':'<p class="tiny mt">Tidak ada masalah ukuran atau referensi yang terdeteksi.</p>'}<p class="tiny muted">Pemeriksaan metadata, bukan verifikasi isi setiap file. Ukuran tidak mencakup seluruh folder project atau salinan pemulihan terpisah.</p>`;
+     result.innerHTML=renderStorageOverview(d);
    }catch(err){if(panel.isConnected)result.textContent=err.message}
    finally{btn.disabled=false}
  };
