@@ -346,6 +346,28 @@ async def upload(request:Request,batch_id:str,file:UploadFile=File(...)):
         raise
     return {'document_id':doc,'transaction_id':txid,'ocr_status':'MANUAL_REQUIRED','risk_reasons':risks}
 
+@app.get('/api/transactions/{txid}/pdf-ocr-page')
+def pdf_ocr_page(request:Request,txid:str,page:int=1,raster:bool=False):
+    u=auth(request)
+    if APP_MODE!='demo':
+        raise HTTPException(403,'PDF OCR saat ini khusus demo lokal')
+    with connection() as c:
+        t=one(c,'SELECT * FROM transactions WHERE id=? AND deleted_at IS NULL',(txid,))
+        if not t:raise HTTPException(404,'Draft tidak ditemukan')
+        own_or_admin(u,t['uploader_id'])
+        if t['status']!='DRAFT':raise HTTPException(409,'Hanya draft aktif')
+        v=one(c,'SELECT v.* FROM documents d JOIN document_versions v ON v.id=d.active_version_id WHERE d.id=?',(t['document_id'],))
+    if not v or v['media_type']!='application/pdf':raise HTTPException(422,'Bukan PDF')
+    try:
+        path=legacy_local_path(v['storage_path'],DATA)
+        if path.stat().st_size>8*1024*1024:raise ValueError()
+        raw=path.read_bytes()
+        if len(raw)!=v['file_size'] or hashlib.sha256(raw).hexdigest()!=v['sha256']:raise ValueError()
+        from .pdf_ocr import read_pdf_page
+        return {**read_pdf_page(raw,page,raster),'document_sha256':v['sha256']}
+    except Exception:
+        raise HTTPException(422,'PDF tidak dapat diproses. Gunakan input manual; maksimum 5 halaman PDF tanpa password.') from None
+
 class BrowserOCRObservation(BaseModel):
     text: str = Field(max_length=16000)
     confidence: float | None = Field(default=None, ge=0, le=100)
