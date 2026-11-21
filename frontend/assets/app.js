@@ -763,8 +763,11 @@ async function managementPage(){
  setHead('Management','Kelola aktivitas dan kategori pengeluaran');
  const cfg=await json('/config');if(state.page!=='management')return;state.config=cfg;
  const a=cfg.activities,c=cfg.categories;
- $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas (${a.length})</h3><p class="tiny muted">Periode ditutup tetap menerima kuitansi dengan alasan keterlambatan dan review.</p><div class="field"><input id="activity-query" aria-label="Cari aktivitas" placeholder="Cari aktivitas..."></div><div id="activity-list" class="mt"></div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" maxlength="100" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori (${c.length})</h3><div class="field mt"><input id="category-query" aria-label="Cari kategori" placeholder="Cari kategori..."></div><div id="category-list" class="mt"></div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" maxlength="80" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div><details class="panel panelpad mt"><summary>Pengaturan lanjutan</summary><p class="muted">Kalender hari kerja dan SLA pemulihan transaksi.</p><button class="btn outline" data-nav="calendar">Calendar &amp; SLA</button><div id="backup-panel" class="mt"></div></details>`;
- if((await json("/health")).mode==="DEMO LOCAL"&&state.page==="management")await setupBackupPanel();
+ $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas (${a.length})</h3><p class="tiny muted">Periode ditutup tetap menerima kuitansi dengan alasan keterlambatan dan review.</p><div class="field"><input id="activity-query" aria-label="Cari aktivitas" placeholder="Cari aktivitas..."></div><div id="activity-list" class="mt"></div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" maxlength="100" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori (${c.length})</h3><div class="field mt"><input id="category-query" aria-label="Cari kategori" placeholder="Cari kategori..."></div><div id="category-list" class="mt"></div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" maxlength="80" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div><details class="panel panelpad mt"><summary>Pengaturan lanjutan</summary><p class="muted">Kalender hari kerja dan SLA pemulihan transaksi.</p><button class="btn outline" data-nav="calendar">Calendar &amp; SLA</button><div id="backup-panel" class="mt"></div><div id="storage-panel" class="mt"></div></details>`;
+ if((await json("/health")).mode==="DEMO LOCAL"&&state.page==="management"){
+   await setupBackupPanel();
+   if(state.page==="management")setupStoragePanel();
+ }
  if(state.page!=="management")return;
  const search=(items,q)=>items.filter(x=>x.name.toLowerCase().includes(q.trim().toLowerCase()));
  const renderA=()=>{$('#activity-list').innerHTML=search(a,$('#activity-query').value).map(x=>`<div class="hint mb"><b>${h(x.name)}</b><p class="tiny">${h(x.status)} · ${pill(x.closure_status)}</p><button class="btn outline" data-activity="${h(x.id+':'+(x.closure_status==='OPEN'?'CLOSED':'OPEN'))}">${x.closure_status==='OPEN'?'Tutup periode':'Buka periode'}</button></div>`).join('')||'<p class="muted">Tidak ada aktivitas.</p>'};
@@ -805,6 +808,37 @@ async function setupBackupPanel(){
   };
   refresh.onclick=()=>setupBackupPanel();
  }catch(err){panel.innerHTML='<p class="notice">'+h(err.message)+'</p>'}
+}
+function storageSize(bytes){
+ const n=Number(bytes);
+ if(!Number.isFinite(n)||n<0)return '—';
+ if(n<1024)return n+' B';
+ const unit=n>=1024**3?'GiB':n>=1024**2?'MiB':'KiB';
+ const divisor=unit==='GiB'?1024**3:unit==='MiB'?1024**2:1024;
+ return new Intl.NumberFormat('id-ID',{maximumFractionDigits:1}).format(n/divisor)+' '+unit;
+}
+function storageIssues(d){
+ const issues=[];
+ const fields=[['missing_receipt_versions','versi kuitansi tidak ditemukan'],['receipt_size_mismatches','versi kuitansi berbeda ukuran'],['missing_exports','arsip Excel tidak ditemukan'],['duplicate_hash_groups','kelompok kuitansi identik (periksa kemungkinan pencatatan ganda)'],['unlinked_receipt_files','file kuitansi tanpa referensi'],['unlinked_export_files','file Excel tanpa referensi'],['temporary_upload_files','file upload sementara tertinggal'],['scan_warnings','kendala saat pemeriksaan']];
+ for(const [key,label] of fields)if(Number(d[key])>0)issues.push(Number(d[key])+' '+label);
+ if(Number(d.disk_free_bytes)<1024**3)issues.push('Sisa ruang disk kurang dari 1 GiB');
+ return issues;
+}
+function setupStoragePanel(){
+ const panel=$('#storage-panel');if(!panel)return;
+ panel.innerHTML='<h3>Penyimpanan Data</h3><p class="tiny muted">Periksa ukuran database, kuitansi, laporan dan cadangan. Tidak menghapus file.</p><button class="btn outline" id="storage-check">Periksa Penyimpanan</button><div id="storage-result" role="status" class="mt"></div>';
+ const btn=panel.querySelector('#storage-check'),result=panel.querySelector('#storage-result');
+ btn.onclick=async()=>{
+   btn.disabled=true;result.textContent='Memeriksa penyimpanan…';
+   try{
+     const d=await json('/admin/storage/status');if(!panel.isConnected)return;
+     const rows=[['Database',d.database_bytes],['Kuitansi (termasuk file sementara)',d.receipt_bytes],['Arsip Excel',d.export_bytes],['Backup harian',d.daily_backup_bytes]];
+     const total=rows.reduce((sum,x)=>sum+Number(x[1]),0);
+     const issues=storageIssues(d);
+     result.innerHTML=`<div class="hint"><b>Ukuran data utama: ${h(storageSize(total))}</b><p class="tiny">Sisa ruang disk: ${h(storageSize(d.disk_free_bytes))} · ${h(d.receipt_versions)} versi kuitansi</p><table class="small-table">${rows.map(([name,size])=>'<tr><td>'+h(name)+'</td><td>'+h(storageSize(size))+'</td></tr>').join('')}</table></div>${issues.length?'<div class="notice mt"><b>Perlu perhatian</b><ul>'+issues.map(x=>'<li>'+h(x)+'</li>').join('')+'</ul><p>Hubungi pengelola jika ada dokumen hilang atau file tidak sesuai. Tidak ada file yang dihapus.</p></div>':'<p class="tiny mt">Tidak ada masalah ukuran atau referensi yang terdeteksi.</p>'}<p class="tiny muted">Pemeriksaan metadata, bukan verifikasi isi setiap file. Ukuran tidak mencakup seluruh folder project atau salinan pemulihan terpisah.</p>`;
+   }catch(err){if(panel.isConnected)result.textContent=err.message}
+   finally{btn.disabled=false}
+ };
 }
 function workflowTime(v){
   const d=new Date(v||'invalid');return Number.isNaN(d.getTime())?'—':d.toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'medium',timeZone:'Asia/Jakarta'});
