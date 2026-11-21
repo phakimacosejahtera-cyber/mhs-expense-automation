@@ -411,6 +411,12 @@ async function editDraft(id){
     const f=new FormData(draftForm);
     const o=Object.fromEntries(f.entries());
     o.mixed_receipt=!!f.get('mixed_receipt');
+    const activity=state.config.activities.find(a=>a.id===t.activity_id);
+    const activityYears=(activity?.name||'').match(/\b(?:19|20)\d{2}\b/g)||[];
+    const receiptYear=String(o.transaction_date||'').slice(0,4);
+    if(activityYears.length===1 && receiptYear && receiptYear!==activityYears[0] &&
+       !confirm('Tanggal kuitansi '+receiptYear+' berbeda dari tahun pada nama aktivitas '+activityYears[0]+'. Laporan mengikuti tanggal kuitansi. Tetap simpan?'))return;
+
     if(!o.category_id)o.category_id=null;
     try{
       await patch('/transactions/'+id+'/draft',o);
