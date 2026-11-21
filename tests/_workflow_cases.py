@@ -121,21 +121,44 @@ def test_correction_approved_only_then_reversal_excludes_from_report(client):
     assert load_workbook(io.BytesIO(client.get('/api/reports/export').content))['Summary']['B2'].value==0
 
 
-def test_admin_initiated_reinstatement_separation_of_duties(client):
+@pytest.mark.parametrize("single_owner", [True, False])
+def test_reinstatement_assigned_admin_boundary(client, single_owner):
+    # Current application policy (also on main): the assigned admin may review
+    # their own request. This is not independent segregation of duties.
     hu=login(client);cat,act=category_activity(client);tid,_,_=upload(client,hu,act)
     draft(client,hu,tid,cat);submit(client,hu,[tid])
-    ha=login(client,'admin');client.post('/api/admin/transactions/'+tid+'/reverse',json={'reason':'Verifikasi ulang biaya'},headers=ha)
+    ha=login(client,'admin')
+    if single_owner:
+        with tx() as con:
+            con.execute("UPDATE users SET active=0 WHERE email='backup@mhs.local'")
+    assert client.post('/api/admin/transactions/'+tid+'/reverse',json={'reason':'Verifikasi ulang biaya'},headers=ha).status_code==200
     r=client.post('/api/transactions/'+tid+'/reinstatement',json={'reason':'Sudah ditemukan bukti sah'},headers=ha)
     assert r.status_code==200,r.text
     assert r.json()['sla_status']=='PROVISIONAL'
-    rid=r.json()['id']; payload={'decision':'APPROVE','reason':'Sudah divalidasi oleh reviewer'}
-    assert client.post('/api/admin/reinstatements/'+rid+'/decision',headers=ha,json=payload).status_code==403
-    assert client.post('/api/admin/reinstatements/'+rid+'/decision',headers=ha,json={'decision':'REJECT','reason':'Tidak disetujui'}).status_code==403
+    rid=r.json()['id']; url='/api/admin/reinstatements/'+rid+'/decision'
+    payload={'decision':'APPROVE','reason':'Sudah divalidasi oleh reviewer'}
+    actor=client.get('/api/me').json()['id']
+    with connection() as con:
+        request=con.execute('SELECT requester_id,assigned_reviewer_id FROM reinstatement_requests WHERE id=?',(rid,)).fetchone()
+        assert request['requester_id']==actor==request['assigned_reviewer_id']
+    hu=login(client,'uploader')
+    assert client.post(url,headers=hu,json=payload).status_code==403
+    if not single_owner:
+        hb=login(client,'backup')
+        assert client.post(url,headers=hb,json=payload).status_code==403
+        assert client.post(url,headers=hb,json={'decision':'REJECT','reason':'Tidak ditugaskan'}).status_code==403
+    ha=login(client,'admin')
     assert active(client,tid)['status']=='REVERSED'
-    hb=login(client,'backup')
-    ok=client.post('/api/admin/reinstatements/'+rid+'/decision',headers=hb,json=payload)
+    assert client.post(url,headers=ha,json={'decision':'APPROVE','reason':''}).status_code==422
+    ok=client.post(url,headers=ha,json=payload)
     assert ok.status_code==200,ok.text
     assert active(client,tid)['status']=='APPROVED'
+    assert client.post(url,headers=ha,json=payload).status_code==409
+    with connection() as con:
+        row=con.execute('SELECT status,reviewer_id,decision_reason FROM reinstatement_requests WHERE id=?',(rid,)).fetchone()
+        assert row['status']=='APPROVED' and row['reviewer_id']==actor and row['decision_reason']==payload['reason']
+        log=con.execute("SELECT actor_id FROM audit_logs WHERE action='REINSTATEMENT_APPROVE' AND target_id=?",(tid,)).fetchone()
+        assert log and log['actor_id']==actor
 
 
 def test_provisional_snooze_once_and_calendar_finalization(client):
