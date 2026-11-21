@@ -763,7 +763,9 @@ async function managementPage(){
  setHead('Management','Kelola aktivitas dan kategori pengeluaran');
  const cfg=await json('/config');if(state.page!=='management')return;state.config=cfg;
  const a=cfg.activities,c=cfg.categories;
- $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas (${a.length})</h3><p class="tiny muted">Periode ditutup tetap menerima kuitansi dengan alasan keterlambatan dan review.</p><div class="field"><input id="activity-query" aria-label="Cari aktivitas" placeholder="Cari aktivitas..."></div><div id="activity-list" class="mt"></div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" maxlength="100" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori (${c.length})</h3><div class="field mt"><input id="category-query" aria-label="Cari kategori" placeholder="Cari kategori..."></div><div id="category-list" class="mt"></div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" maxlength="80" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div><details class="panel panelpad mt"><summary>Pengaturan lanjutan</summary><p class="muted">Kalender hari kerja dan SLA pemulihan transaksi.</p><button class="btn outline" data-nav="calendar">Calendar &amp; SLA</button></details>`;
+ $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas (${a.length})</h3><p class="tiny muted">Periode ditutup tetap menerima kuitansi dengan alasan keterlambatan dan review.</p><div class="field"><input id="activity-query" aria-label="Cari aktivitas" placeholder="Cari aktivitas..."></div><div id="activity-list" class="mt"></div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" maxlength="100" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori (${c.length})</h3><div class="field mt"><input id="category-query" aria-label="Cari kategori" placeholder="Cari kategori..."></div><div id="category-list" class="mt"></div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" maxlength="80" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div><details class="panel panelpad mt"><summary>Pengaturan lanjutan</summary><p class="muted">Kalender hari kerja dan SLA pemulihan transaksi.</p><button class="btn outline" data-nav="calendar">Calendar &amp; SLA</button><div id="backup-panel" class="mt"></div></details>`;
+ if((await json("/health")).mode==="DEMO LOCAL"&&state.page==="management")await setupBackupPanel();
+ if(state.page!=="management")return;
  const search=(items,q)=>items.filter(x=>x.name.toLowerCase().includes(q.trim().toLowerCase()));
  const renderA=()=>{$('#activity-list').innerHTML=search(a,$('#activity-query').value).map(x=>`<div class="hint mb"><b>${h(x.name)}</b><p class="tiny">${h(x.status)} · ${pill(x.closure_status)}</p><button class="btn outline" data-activity="${h(x.id+':'+(x.closure_status==='OPEN'?'CLOSED':'OPEN'))}">${x.closure_status==='OPEN'?'Tutup periode':'Buka periode'}</button></div>`).join('')||'<p class="muted">Tidak ada aktivitas.</p>'};
  const renderC=()=>{$('#category-list').innerHTML=search(c,$('#category-query').value).map(x=>`<div class="hint mb">${h(x.name)}</div>`).join('')||'<p class="muted">Tidak ada kategori.</p>'};
@@ -776,6 +778,33 @@ async function managementPage(){
    const btn=form.querySelector('button');masterBusy=true;btn.disabled=true;
    try{await post(route,{name});toast('Data dibuat');if(state.page==='management')await nav('management')}catch(err){toast(err.message,true)}finally{masterBusy=false;btn.disabled=false}
  };
+}
+async function setupBackupPanel(){
+ const panel=$('#backup-panel');if(!panel)return;
+ panel.innerHTML='<h3>Backup &amp; Pemulihan</h3><p class="tiny muted">Memeriksa cadangan...</p>';
+ try{
+  const b=await json('/admin/backup/status');if(!panel.isConnected||state.page!=='management')return;
+  panel.innerHTML=`<h3>Backup &amp; Pemulihan</h3><p>Backup otomatis: <b>${b.automatic?'Aktif':'Nonaktif'}</b> · ${b.count} cadangan harian</p><p class="tiny muted">${b.state==='failed'?'Backup otomatis terakhir gagal; coba backup manual.':b.latest?'Cadangan terakhir: '+h(b.latest):'Belum ada cadangan harian.'}</p><p class="tiny muted">Simpan ZIP di media terpisah. Cadangan berisi data perusahaan dan informasi akun.</p><div class="inline-actions"><button class="btn primary" id="backup-download">Unduh Backup</button><button class="btn outline" id="backup-recover" ${b.latest?'':'disabled'}>Pulihkan Cadangan Terakhir</button><button class="btn outline" id="backup-refresh">Perbarui Status</button></div><p id="backup-status" class="tiny" role="status"></p>`;
+  const download=panel.querySelector('#backup-download'),recover=panel.querySelector('#backup-recover'),status=panel.querySelector('#backup-status'),refresh=panel.querySelector('#backup-refresh');
+  let busy=false;
+  async function run(action){
+   if(busy)return;busy=true;download.disabled=recover.disabled=refresh.disabled=true;
+   status.textContent='Memproses. Jangan tutup aplikasi.';
+   try{await action()}catch(err){status.textContent=err.message;toast(err.message,true)}
+   finally{busy=false;download.disabled=refresh.disabled=false;recover.disabled=!b.latest}
+  }
+  download.onclick=()=>run(async()=>{
+   const res=await api('/admin/backup/download',{method:'POST',body:JSON.stringify({})});
+   const blob=await res.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');
+   a.href=url;a.download='MHS_Backup_'+new Date().toISOString().replace(/[:.]/g,'-')+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);
+   status.textContent='Backup berhasil dibuat. Periksa folder unduhan.';
+  });
+  recover.onclick=()=>{
+   if(!confirm('Buat salinan pemulihan dari backup terakhir? Database aktif tidak akan diganti.'))return;
+   return run(async()=>{const r=await post('/admin/backup/recover-latest',{});status.textContent='Salinan pemulihan tersedia di storage/'+r.folder+'. Data aktif tetap utuh. Hubungi pengelola untuk mengaktifkan salinan.'});
+  };
+  refresh.onclick=()=>setupBackupPanel();
+ }catch(err){panel.innerHTML='<p class="notice">'+h(err.message)+'</p>'}
 }
 function workflowTime(v){
   const d=new Date(v||'invalid');return Number.isNaN(d.getTime())?'—':d.toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'medium',timeZone:'Asia/Jakarta'});
