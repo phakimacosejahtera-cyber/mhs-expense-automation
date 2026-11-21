@@ -188,3 +188,40 @@ def enrich_observation(observation):
     return {**observation,"field_candidates":receipt_fields(text),
             "labelled_amounts":labelled,"terbilang_amounts":words,
             "amount_review":review,"amount_warnings":notes,"date_context":date_context(text)}
+
+
+def combine_observations(browser,paddle):
+    """Separate engine scores; compare evidence, never average confidence."""
+    browser=browser or {}
+    btext=str(browser.get("text") or "")[:7800]
+    ptext=str(paddle.get("text") or "")[:8000]
+    text="-- Tesseract --\n"+btext+"\n-- PaddleOCR --\n"+ptext
+    result=enrich_observation({"text":text,"confidence":None,"suggestions":browser.get("suggestions") or {}})
+    b=labelled_amounts(btext);p=labelled_amounts(ptext)
+    bv={(x["kind"],x["value"]) for x in b if x["kind"]!="potongan_pajak"}
+    pv={(x["kind"],x["value"]) for x in p if x["kind"]!="potongan_pajak"}
+    conflicts=bool(bv and pv and bv!=pv)
+    agreed=bv & pv
+    for row in result["amount_review"]:
+        if row["kind"]=="potongan_pajak":continue
+        if conflicts:
+            row["usable"]=False;row["reason"]="Hasil mesin berbeda; verifikasi manual"
+        elif (row["kind"],row["value"]) in agreed and row["usable"]:
+            row["reason"]="Kedua mesin membaca nilai berlabel yang sama; tetap periksa asli"
+    if conflicts:result["amount_warnings"].append("Nominal berlabel dari kedua mesin berbeda.")
+    result["engine_scores"]={"Tesseract":browser.get("confidence"),"PaddleOCR":paddle.get("confidence")}
+    result["engines"]=["Tesseract","PaddleOCR"] if btext else ["PaddleOCR"]
+    # Extract valid date candidates from both engines, including Paddle-only runs.
+    from datetime import date
+    dates=set()
+    for m in re.finditer(r"\b(\d{1,2})[-/.](\d{1,2})[-/.]((?:19|20)\d{2})\b",text):
+        try:dates.add(date(int(m[3]),int(m[2]),int(m[1])).isoformat())
+        except ValueError:pass
+    for m in re.finditer(r"\b((?:19|20)\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b",text):
+        try:dates.add(date(int(m[1]),int(m[2]),int(m[3])).isoformat())
+        except ValueError:pass
+    for d in (browser.get("suggestions") or {}).get("dates",[]):
+        try:dates.add(date.fromisoformat(d).isoformat())
+        except (ValueError,TypeError):pass
+    result["suggestions"]={**result["suggestions"],"dates":sorted(dates)[:20]}
+    return result
