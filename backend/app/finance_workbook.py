@@ -65,7 +65,7 @@ def build_workbook(data, expenses, base, snapshot_at):
     wb = Workbook()
     ws = wb.active
     ws.title = "Ringkasan"
-    period = str(data["year"]) + (f"-{data['month']:02d}" if data["month"] else "")
+    period = (str(data["year"]) + (f"-{data['month']:02d}" if data["month"] else "")) if data["year"] else "Semua Tahun"
     ws.merge_cells("A1:B1")
     ws["A1"] = "PT MULIA HAKIMACO SEJAHTERA"
     ws["A1"].fill = PatternFill("solid", fgColor=DARK)
@@ -101,29 +101,31 @@ def build_workbook(data, expenses, base, snapshot_at):
             cell.style = "Hyperlink"
     # The top summary retains server-computed values as an immutable audit reference.
     # Monthly formula area uses the transaction detail rows, not subtotal rows.
-    ws["A11"] = "REKAP BULANAN — FORMULA EXCEL"
+    ws["A11"] = "REKAP BULANAN — FORMULA EXCEL" if data["year"] else "REKAP TAHUNAN — FORMULA EXCEL"
     ws.merge_cells("A11:D11")
     ws["A11"].font = Font(bold=True, color=ORANGE)
-    for col, label in enumerate(("Bulan", "Pemasukan", "Pengeluaran", "Selisih"), 1):
+    for col, label in enumerate(("Bulan" if data["year"] else "Tahun", "Pemasukan", "Pengeluaran", "Selisih"), 1):
         cell = ws.cell(12, col, label)
         cell.fill = PatternFill("solid", fgColor=DARK)
         cell.font = Font(bold=True, color="FFFFFF")
-    selected = [data["month"]] if data["month"] else list(range(1,13))
+    selected = ([data["month"]] if data["month"] else list(range(1,13))) if data["year"] else sorted({r[0].year for r in inc_rows+exp_rows})
     months = ("Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember")
     end_inc, end_exp = max(2,len(inc_rows)+1), max(2,len(exp_rows)+1)
     year = data["year"]
-    for row, month in enumerate(selected, 13):
-        ws.cell(row, 1, months[month-1])
+    for row, bucket in enumerate(selected, 13):
+        ws.cell(row, 1, months[bucket-1] if year else bucket)
+        begin = f"DATE({year},{bucket},1)" if year else f"DATE({bucket},1,1)"
+        finish = f"DATE({year},{bucket+1},1)" if year else f"DATE({bucket+1},1,1)"
         for col, sheet, end in ((2,"Pemasukan",end_inc),(3,"Pengeluaran",end_exp)):
             dates = f"'{sheet}'!$A$2:$A${end}"
             amounts = f"'{sheet}'!$C$2:$C${end}"
-            ws.cell(row, col, f'=ROUND(SUMIFS({amounts},{dates},">="&DATE({year},{month},1),{dates},"<"&DATE({year},{month+1},1)),2)')
+            ws.cell(row, col, f'=ROUND(SUMIFS({amounts},{dates},">="&{begin},{dates},"<"&{finish}),2)')
         ws.cell(row,4,f"=ROUND(B{row}-C{row},2)")
     total = 13+len(selected)
     ws.cell(total,1,"TOTAL PERIODE")
     for col in range(2,5):
         letter = get_column_letter(col)
-        ws.cell(total,col,f"=ROUND(SUM({letter}13:{letter}{total-1}),2)")
+        ws.cell(total,col,f"=ROUND(SUM({letter}13:{letter}{total-1}),2)" if selected else "=0")
         for row in range(13,total+1):
             ws.cell(row,col).number_format = MONEY
     for cell in ws[total][:4]:
@@ -143,7 +145,7 @@ def build_workbook(data, expenses, base, snapshot_at):
     ws.cell(total+3,1,"Nilai cek seharusnya nol; koreksi data melalui website.")
     ws.merge_cells(start_row=total+3,start_column=1,end_row=total+3,end_column=4)
     table(wb.create_sheet("Report Info"),["Informasi","Nilai"],[
-        ["Periode mulai",data["start"]],["Periode akhir (eksklusif)",data["end_exclusive"]],
+        ["Periode mulai",data["start"] if data["year"] else "Seluruh tahun valid"],["Periode akhir (eksklusif)",data["end_exclusive"] if data["year"] else "Seluruh tahun valid"],
         ["Snapshot UTC",snapshot_at],["Status","SIMULASI LOKAL — bukan laporan pajak resmi"],
         ["Pengeluaran","APPROVED dan tidak dihapus"],["Pemasukan","Tercatat dan tidak dibatalkan"],
         ["Nilai legacy","Tidak dialokasikan atau dihitung"],["Histori","Snapshot; ekspor lama dipertahankan"],["Formula","SUM/SUMIFS/SUBTOTAL dihitung Excel saat dibuka; ringkasan atas adalah nilai snapshot server."],
