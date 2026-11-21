@@ -41,7 +41,9 @@ async function nav(page){
  }catch(e){toast(e.message,true);$('#page-content').innerHTML=`<div class="notice danger-notice">${h(e.message)}</div>`}
 }
 async function loadTx(){state.transactions=await json('/transactions');return state.transactions}
-let financeYear=new Date().getFullYear(), financeMonth=0;
+let financeYear=0, financeMonth=0;
+function yearOptions(d){return '<option value="0" '+(financeYear===0?'selected':'')+'>Semua Tahun</option>'+d.available_years.map(y=>'<option value="'+y+'" '+(financeYear===y?'selected':'')+'>'+y+'</option>').join('')}
+function financePeriodChange(e,page){financeYear=Number(e.target.value);financeMonth=0;return nav(page)}
 async function dashboard(){
  setHead('Dashboard','Ringkasan keuangan dan status pencatatan bukti transaksi');
  const isAdmin=state.me.role==='admin';
@@ -50,9 +52,12 @@ async function dashboard(){
  const [d,allTx]=await Promise.all([json(finance?'/finance/summary?year='+financeYear+(financeMonth?'&month='+financeMonth:''):'/dashboard'),loadTx()]);
  if(state.page!=='dashboard')return;
  const rows=finance?allTx.filter(t=>t.transaction_date>=d.start && t.transaction_date<d.end_exclusive):allTx;
- const scope=finance?(financeMonth?String(financeMonth).padStart(2,'0')+'/'+financeYear:String(financeYear)):'Seluruh periode';
+ const scope=finance?(financeYear===0?'Semua Tahun':financeMonth?String(financeMonth).padStart(2,'0')+'/'+financeYear:String(financeYear)):'Seluruh periode';
  const months=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
- const maxBar=Math.max(1,...(d.monthly_income||[]),...(d.monthly_expense||[]));
+ const chartRows=finance?(financeYear===0?d.annual.map(x=>({label:String(x.year),inc:x.income_cents,out:x.expense_cents})):months.map((m,i)=>({label:m,inc:d.monthly_income[i],out:d.monthly_expense[i]})).filter((_,i)=>!financeMonth||financeMonth===i+1)):[];
+ const peak=chartRows.reduce((v,x)=>Math.max(v,x.inc,x.out),0);
+ const step=peak?Math.pow(10,Math.floor(Math.log10(peak/4))):100;
+ const maxBar=4*Math.ceil((peak||400)/(4*step))*step;
  const drafts=finance?d.drafts:rows.filter(t=>t.status==='DRAFT').length;
  const pending=d.pending_review||0;
  const shortRp=cents=>{
@@ -81,7 +86,7 @@ async function dashboard(){
  <div class="dash-toolbar">
    <div><h2>Ringkasan keuangan</h2><p>${h(scope)} · pengeluaran disetujui saja</p></div>
    <div class="dash-toolbar-actions">
-     ${finance?`<label class="finance-filter">Tahun <input id="finance-year" type="number" min="1900" max="9998" value="${financeYear}" aria-label="Tahun laporan"></label><label class="finance-filter">Bulan <select id="finance-month"><option value="0">Semua</option>${months.map((m,i)=>`<option value="${i+1}" ${financeMonth===i+1?'selected':''}>${m}</option>`).join('')}</select></label>`:''}
+     ${finance?`<label class="finance-filter">Tahun <select id="finance-year" aria-label="Tahun laporan">${yearOptions(d)}</select></label><label class="finance-filter">Bulan <select id="finance-month" ${financeYear===0?'disabled':''}><option value="0">Semua</option>${months.map((m,i)=>`<option value="${i+1}" ${financeMonth===i+1?'selected':''}>${m}</option>`).join('')}</select></label>`:''}
      <button class="btn primary" data-nav="upload">+ Upload Bukti</button>
      <button class="btn outline" data-nav="reports">Laporan Excel</button>
    </div>
@@ -127,7 +132,7 @@ async function dashboard(){
 
  ${finance && d.legacy_income_cents? `<div class="notice mt">Dana masuk lama tanpa tanggal: ${fmtRp(d.legacy_income_cents)}. Tidak dihitung dalam laporan periode. Nilai lama tetap tersimpan.</div>`:''}
  ${finance?`<section class="dash-card mt"><div class="chart-header"><div><h3>Arus Kas ${h(scope)}</h3><small>Pemasukan tercatat dan pengeluaran disetujui</small></div><div class="chart-legend"><span><i class="dot-sq" style="background:#14b8a6"></i>Pemasukan</span><span><i class="dot-sq" style="background:#f4831e"></i>Pengeluaran</span></div></div>
- <div class="bar-chart-wrap" aria-label="Grafik arus kas"><div class="bar-grid-lines"><span></span><span></span><span></span><span></span></div><div class="bars-row">${months.map((m,i)=>{const inc=d.monthly_income[i],out=d.monthly_expense[i];return `<div class="month-col"><div class="bar-pair"><div class="bar-in" style="height:${Math.round(inc/maxBar*145)}px;min-height:0" title="${m}: ${fmtRp(inc)}"></div><div class="bar-out" style="height:${Math.round(out/maxBar*145)}px;min-height:0;background:#f4831e" title="${m}: ${fmtRp(out)}"></div></div><span class="month-lbl">${m}</span></div>`}).join('')}</div></div>
+ <div class="finance-chart-scroll"><div class="finance-chart" style="min-width:${Math.max(280,chartRows.length*38+82)}px"><div class="finance-axis">${[4,3,2,1,0].map(n=>`<span>${shortRp(maxBar*n/4)}</span>`).join('')}</div><div class="finance-plot"><div class="finance-gridlines">${[0,1,2,3,4].map(()=>'<i></i>').join('')}</div><div class="finance-bars" style="grid-template-columns:repeat(${Math.max(1,chartRows.length)}, minmax(0,1fr))">${chartRows.map(x=>`<div class="month-col"><div class="finance-bar-pair"><div class="bar-in" style="height:${x.inc/maxBar*100}%;min-height:0" title="${h(x.label)}: ${fmtRp(x.inc)}"></div><div class="bar-out" style="height:${x.out/maxBar*100}%;min-height:0;background:#f4831e" title="${h(x.label)}: ${fmtRp(x.out)}"></div></div><span class="month-lbl">${h(x.label)}</span></div>`).join('')}</div></div></div></div>${chartRows.length?'':'<p class="tiny muted">Belum ada transaksi resmi.</p>'}
  <p class="tiny muted">Grafik mengikuti periode pilihan. Arahkan kursor ke batang untuk nominal.</p></section>`:''}
  <div class="analytics-grid">
    <section class="dash-card dash-work-panel">
@@ -194,7 +199,7 @@ async function dashboard(){
  </section>`;
 
  if(finance){
-   $('#finance-year').onchange=async e=>{const y=Number(e.target.value);if(!Number.isInteger(y)||y<1900||y>9998){e.target.value=financeYear;return toast('Tahun tidak valid',true)}financeYear=y;await nav('dashboard')};
+   $('#finance-year').onchange=e=>financePeriodChange(e,'dashboard');
    $('#finance-month').onchange=async e=>{financeMonth=Number(e.target.value);await nav('dashboard')};
    document.querySelectorAll('[data-income-reverse]').forEach(btn=>btn.onclick=async()=>{const reason=prompt('Alasan pembatalan pemasukan (minimal 5 karakter):');if(!reason)return;if(!confirm('Batalkan pemasukan ini? Histori tetap tersimpan.'))return;btn.disabled=true;try{await post('/finance/income/'+btn.dataset.incomeReverse+'/reverse',{reason});await nav('dashboard')}catch(e){toast(e.message,true);btn.disabled=false}});
  }
@@ -204,7 +209,7 @@ async function dashboard(){
      const requestId=crypto.randomUUID();
      const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jakarta',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
      modal('Catat Pemasukan',`<form id="income-form" class="grid2">${field('Tanggal','transaction_date',today,'date',true)}${field('Nominal (rupiah, tanpa pemisah)','amount','','number',true,'min="1" max="999999999999" step="1"')}${field('Keterangan','description','','text',true,'maxlength="500"')}${field('Transfer dari / pengirim','sender','','text',false,'maxlength="200"')}<div><button class="btn primary" type="submit">Simpan Pemasukan</button></div></form><p class="tiny muted">Catat dana yang benar-benar diterima. Gunakan data simulasi saja.</p>`);
-     $('#income-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;const data=Object.fromEntries(new FormData(form));const amt=Number(data.amount);if(!Number.isSafeInteger(amt)||amt<=0||amt>999999999999)return toast('Nominal tidak valid',true);const btn=form.querySelector('button');btn.disabled=true;try{await post('/finance/income',{request_id:requestId,transaction_date:data.transaction_date,amount_cents:amt*100,description:data.description,sender:data.sender});closeModal();toast('Pemasukan tercatat');financeYear=Number(data.transaction_date.slice(0,4));financeMonth=0;await nav('dashboard')}catch(err){toast(err.message,true);btn.disabled=false}};
+     $('#income-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;const data=Object.fromEntries(new FormData(form));const amt=Number(data.amount);if(!Number.isSafeInteger(amt)||amt<=0||amt>999999999999)return toast('Nominal tidak valid',true);const btn=form.querySelector('button');btn.disabled=true;try{await post('/finance/income',{request_id:requestId,transaction_date:data.transaction_date,amount_cents:amt*100,description:data.description,sender:data.sender});closeModal();toast('Pemasukan tercatat');financeYear=0;financeMonth=0;await nav('dashboard')}catch(err){toast(err.message,true);btn.disabled=false}};
      return;
    }
    const raw=prompt('Masukkan total pemasukan / anggaran kas (IDR), contoh: 100000000', String((d.income_cents||0)/100));
@@ -415,7 +420,7 @@ async function editDraft(id){
   };
 }
 
-async function transactionsPage(){setHead(state.me.role==='admin'?'All Transactions':'My Transactions','Lihat status, dokumen, koreksi, dan riwayat');let rows=await loadTx();$('#page-content').innerHTML=`<div class="filters"><input id="tx-search" placeholder="Cari keterangan, aktivitas, atau uploader..."><select id="tx-status"><option value="ALL">Semua status</option>${['DRAFT','PENDING_REVIEW','APPROVED','REJECTED','REVERSED'].map(s=>`<option>${s}</option>`).join('')}</select><button class="btn outline" data-nav="${state.me.role==='admin'?'reviews':'upload'}">${state.me.role==='admin'?'Review Queue':'Upload Baru'}</button></div><section class="panel" id="tx-results">${txTable(rows)}</section>`;
+async function transactionsPage(){setHead(state.me.role==='admin'?'All Transactions':'My Transactions','Lihat status, dokumen, koreksi, dan riwayat');let rows=await loadTx();$('#page-content').innerHTML=`<div class="filters"><input id="tx-search" placeholder="Cari keterangan, aktivitas, atau uploader..."><select id="tx-status"><option value="ALL">Semua status</option>${['DRAFT','PENDING_REVIEW','APPROVED','REJECTED','REVERSED'].map(s=>`<option>${s}</option>`).join('')}</select><button class="btn outline" data-nav="${state.me.role==='admin'?'reviews':'upload'}">${state.me.role==='admin'?'Review Queue':'Upload Baru'}</button></div><section class="panel tx-compact" id="tx-results">${txTable(rows)}</section>`;
  function filter(){let q=$('#tx-search').value.toLowerCase(),s=$('#tx-status').value;$('#tx-results').innerHTML=txTable(rows.filter(t=>(s==='ALL'||t.status===s)&&[t.description,t.activity_name,t.uploader_name].some(x=>(x||'').toLowerCase().includes(q))))}
  $('#tx-search').oninput=filter;$('#tx-status').onchange=filter;
 }
@@ -446,13 +451,13 @@ async function reportsPage(){
    const params='year='+financeYear+(financeMonth?'&month='+financeMonth:'');
    const d=await json('/finance/summary?'+params);
    if(state.page!=='reports')return;
-   $('#page-content').innerHTML=`<div class="dash-toolbar"><div><h2>Rekap Keuangan MHS</h2><p>Periode yang sama dengan dashboard</p></div><div class="dash-toolbar-actions"><label class="finance-filter">Tahun <input id="report-year" type="number" min="1900" max="9998" value="${financeYear}"></label><label class="finance-filter">Bulan <select id="report-month"><option value="0">Semua</option>${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'].map((m,i)=>`<option value="${i+1}" ${financeMonth===i+1?'selected':''}>${m}</option>`).join('')}</select></label></div></div>
+   $('#page-content').innerHTML=`<div class="dash-toolbar"><div><h2>Rekap Keuangan MHS</h2><p>Periode yang sama dengan dashboard</p></div><div class="dash-toolbar-actions"><label class="finance-filter">Tahun <select id="report-year">${yearOptions(d)}</select></label><label class="finance-filter">Bulan <select id="report-month" ${financeYear===0?'disabled':''}><option value="0">Semua</option>${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'].map((m,i)=>`<option value="${i+1}" ${financeMonth===i+1?'selected':''}>${m}</option>`).join('')}</select></label></div></div>
    <div class="dash-kpi-grid">${[['Pemasukan',d.income_cents],['Pengeluaran',d.total_cents],['Selisih tercatat',d.net_cents]].map(([label,v])=>`<div class="dash-card"><div class="dash-card-title">${label}</div><div class="dash-val">${rp(v)}</div></div>`).join('')}</div>
    <section class="panel panelpad mt"><h3>Unduh laporan periode</h3><p class="muted">Ringkasan, Semua Transaksi, Pemasukan, Pengeluaran, Report Info. Pengeluaran APPROVED dan pemasukan aktif saja.</p><button class="btn primary" id="finance-export">Download Excel (.xlsx)</button><p class="tiny muted">Snapshot tidak berubah setelah koreksi. Tautan kuitansi memerlukan login aktif pada server lokal. Bukan laporan pajak resmi.</p>${d.legacy_income_cents?`<div class="notice">Nilai lama tanpa tanggal ${rp(d.legacy_income_cents)} tidak dihitung.</div>`:''}</section>
    <section class="panel panelpad mt"><h3>Ekspor pengeluaran lama</h3><p class="muted">Format kompatibilitas lama, seluruh periode atau aktivitas terpilih; tidak memuat pemasukan.</p><div class="field"><label>Aktivitas</label><select id="report-activity">${opts(state.config.activities,null,'Semua aktivitas')}</select></div><button class="btn outline mt" id="export-xlsx">Download format lama</button></section>`;
-   $('#report-year').onchange=e=>{const y=Number(e.target.value);if(!Number.isInteger(y)||y<1900||y>9998){e.target.value=financeYear;return toast('Tahun tidak valid',true)}financeYear=y;nav('reports')};
+   $('#report-year').onchange=e=>financePeriodChange(e,'reports');
    $('#report-month').onchange=e=>{financeMonth=Number(e.target.value);nav('reports')};
-   $('#finance-export').onclick=async()=>{const btn=$('#finance-export');btn.disabled=true;try{const res=await api('/finance/export?'+params);const blob=await res.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='MHS_Rekap_Keuangan_'+financeYear+(financeMonth?'-'+String(financeMonth).padStart(2,'0'):'')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);toast('Laporan Excel berhasil dibuat')}catch(e){toast(e.message,true)}finally{btn.disabled=false}};
+   $('#finance-export').onclick=async()=>{const btn=$('#finance-export');btn.disabled=true;try{const res=await api('/finance/export?'+params);const blob=await res.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='MHS_Rekap_Keuangan_'+(financeYear||'Semua_Tahun')+(financeMonth?'-'+String(financeMonth).padStart(2,'0'):'')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);toast('Laporan Excel berhasil dibuat')}catch(e){toast(e.message,true)}finally{btn.disabled=false}};
    $('#export-xlsx').onclick=()=>{const a=$('#report-activity').value;window.location.href='/api/reports/export'+(a?'?activity_id='+encodeURIComponent(a):'')};
    return;
  }
