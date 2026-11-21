@@ -6,7 +6,7 @@ const short = s => s ? new Date(s).toLocaleString('id-ID',{dateStyle:'medium',ti
 const state={me:null,config:null,page:'dashboard',transactions:[],queue:null,selected:new Set(),
   ocrResults:new Map(),ocrStatus:new Map()};
 const navUploader=[['dashboard','◫','Ringkasan'],['upload','↥','Upload Receipt'],['transactions','▤','My Transactions'],['reports','▥','My Reports'],['notifications','♧','Notifications']];
-const navAdmin=[['dashboard','◫','Dashboard'],['upload','⬆','Upload Receipt'],['reviews','☑','Review Queue'],['transactions','▤','All Transactions'],['reports','▥','Reports & Excel'],['calendar','◷','Calendar & SLA'],['management','⚙','Management'],['audit','☷','Audit Trail'],['notifications','♧','Notifications']];
+const navAdmin=[['dashboard','◫','Dashboard'],['upload','⬆','Upload Receipt'],['reviews','☑','Review Queue'],['transactions','▤','All Transactions'],['reports','▥','Reports & Excel'],['management','⚙','Management'],['audit','☷','Audit Trail'],['notifications','♧','Notifications']];
 
 async function api(path,opts={}){
   let headers={...(opts.headers||{})};if(opts.method && opts.method!=='GET')headers['X-CSRF-Token']=state.me?.csrf||'';
@@ -602,8 +602,35 @@ async function correctionForm(id){let t=state.transactions.find(x=>x.id===id);if
  let requestId=null;
  try{let r=await post('/transactions/'+id+'/corrections',{reason:f.get('reason'),proposed:p});requestId=r.id;if(file){let fd=new FormData();fd.append('file',file);await json('/corrections/'+r.id+'/replacement',{method:'POST',body:fd})}toast('Permintaan koreksi dikirim dan menunggu admin');if(form.isConnected)closeModal();if(state.page==='transactions')await nav('transactions')}catch(ex){if(requestId){toast('Permintaan koreksi sudah dibuat, tetapi lampiran belum terkonfirmasi. Periksa bersama admin sebelum keputusan.',true);if(form.isConnected)closeModal();if(state.page==='transactions')await nav('transactions')}else{toast(ex.message,true);btn.disabled=false}}};
 }
-async function actionReverse(id){let reason=prompt('Alasan pembatalan approval (wajib, minimal 5 karakter):');if(!reason)return;if(!confirm('Yakin reverse transaksi ini? Transaksi tidak lagi masuk laporan terbaru.'))return;try{await post('/admin/transactions/'+id+'/reverse',{reason});toast('Transaksi dibatalkan dengan audit trail');await nav('transactions')}catch(e){toast(e.message,true)}}
-async function actionReinstate(id){let reason=prompt('Alasan reinstatement (minimal 5 karakter):');if(!reason)return;try{let r=await post('/transactions/'+id+'/reinstatement',{reason});toast(`Reinstatement pending. SLA: ${r.sla_status}`);await nav('transactions')}catch(e){toast(e.message,true)}}
+let financialBusy=false;
+async function financialAction(id,reverse){
+  if(financialBusy)return;
+  const page=state.page,rows=await loadTx();if(page!==state.page)return;
+  const t=rows.find(x=>x.id===id);
+  if(!t||t.status!==(reverse?'APPROVED':'REVERSED'))return toast('Status berubah. Muat ulang daftar.',true);
+  if(reverse&&state.me?.role!=='admin')return toast('Hanya admin dapat membatalkan.',true);
+  if(!reverse&&t.reinstatement_pending)return toast('Permintaan pemulihan sudah pending.',true);
+  const impact=reverse?'Pengeluaran keluar dari laporan terbaru. Kuitansi dan histori tetap tersimpan; koreksi pending ditutup.':'Pengeluaran tetap tidak dihitung sampai permintaan pemulihan disetujui.';
+  modal(reverse?'Batalkan Persetujuan':'Ajukan Pemulihan',`<div class="hint"><b>${h(t.description||'Transaksi')}</b><p>${rp(t.amount_cents)} · ${h(t.transaction_date||'—')} · ${pill(t.status)}</p><a target="_blank" rel="noopener" href="/api/receipts/${h(t.document_id)}">Periksa kuitansi ↗</a></div><p class="notice mt">${impact}</p><form id="financial-form" class="mt"><div class="field"><label>Alasan (minimal 5 karakter)*</label><textarea name="reason" minlength="5" required></textarea></div><label class="checkrow mt"><input type="checkbox" name="confirmed" required> Saya memahami dampaknya terhadap laporan.</label><button type="submit" class="btn ${reverse?'danger':'primary'} mt">${reverse?'Batalkan Persetujuan':'Ajukan Pemulihan'}</button><p id="financial-status" role="status" class="tiny muted"></p></form>`,'<button id="modal-done" class="btn outline">Tutup</button>');
+  $('#modal-done').onclick=closeModal;
+  const form=$('#financial-form');
+  form.onsubmit=async e=>{
+    e.preventDefault();if(financialBusy)return;
+    const fd=new FormData(form),reason=String(fd.get('reason')||'').trim();
+    if(reason.length<5||!fd.get('confirmed'))return toast('Lengkapi alasan dan konfirmasi.',true);
+    const btn=form.querySelector('button[type=submit]'),status=form.querySelector('#financial-status');
+    financialBusy=true;btn.disabled=true;status.textContent='Memproses…';
+    let saved=false;
+    try{
+      const r=await post(reverse?'/admin/transactions/'+id+'/reverse':'/transactions/'+id+'/reinstatement',{reason});
+      saved=true;toast(reverse?'Persetujuan dibatalkan dan dicatat.':'Pemulihan diajukan · SLA '+r.sla_status);
+      if(form.isConnected)closeModal();if(state.page===page)await nav(page);
+    }catch(err){status.textContent=err.message;toast(err.message,true)}
+    finally{financialBusy=false;if(!saved)btn.disabled=false}
+  };
+}
+async function actionReverse(id){await financialAction(id,true)}
+async function actionReinstate(id){await financialAction(id,false)}
 async function actionDelete(id){if(!confirm('Soft-delete draft? Admin dapat memulihkannya dalam 30 hari.'))return;try{await json('/transactions/'+id+'/draft',{method:'DELETE'});toast('Draft soft-deleted');await nav('upload')}catch(e){toast(e.message,true)}}
 // Phase 3.5: contextual review; existing backend is the authority.
 let reviewSubmitting=false;
@@ -712,7 +739,7 @@ async function reportsPage(){
    $('#page-content').innerHTML=`<div class="dash-toolbar"><div><h2>Rekap Keuangan MHS</h2><p>Periode yang sama dengan dashboard</p></div><div class="dash-toolbar-actions"><label class="finance-filter">Tahun <select id="report-year">${yearOptions(d)}</select></label><label class="finance-filter">Bulan <select id="report-month" ${financeYear===0?'disabled':''}><option value="0">Semua</option>${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'].map((m,i)=>`<option value="${i+1}" ${financeMonth===i+1?'selected':''}>${m}</option>`).join('')}</select></label></div></div>
    <div class="dash-kpi-grid">${[['Pemasukan',d.income_cents],['Pengeluaran',d.total_cents],['Selisih tercatat',d.net_cents]].map(([label,v])=>`<div class="dash-card"><div class="dash-card-title">${label}</div><div class="dash-val">${rp(v)}</div></div>`).join('')}</div>
    <section class="panel panelpad mt"><h3>Unduh laporan periode</h3><p class="muted">Ringkasan, Semua Transaksi, Pemasukan, Pengeluaran, Report Info. Pengeluaran APPROVED dan pemasukan aktif saja.</p><button class="btn primary" id="finance-export">Download Excel (.xlsx)</button><p class="tiny muted">Snapshot tidak berubah setelah koreksi. Tautan kuitansi memerlukan login aktif pada server lokal. Bukan laporan pajak resmi.</p>${d.legacy_income_cents?`<div class="notice">Nilai lama tanpa tanggal ${rp(d.legacy_income_cents)} tidak dihitung.</div>`:''}</section>
-   <section class="panel panelpad mt"><h3>Ekspor pengeluaran lama</h3><p class="muted">Format kompatibilitas lama, seluruh periode atau aktivitas terpilih; tidak memuat pemasukan.</p><div class="field"><label>Aktivitas</label><select id="report-activity">${opts(state.config.activities,null,'Semua aktivitas')}</select></div><button class="btn outline mt" id="export-xlsx">Download format lama</button></section>`;
+   <details class="panel panelpad mt"><summary>Format Excel lama (opsional)</summary><p class="muted">Format kompatibilitas lama, seluruh periode atau aktivitas terpilih; tidak memuat pemasukan.</p><div class="field"><label>Aktivitas</label><select id="report-activity">${opts(state.config.activities,null,'Semua aktivitas')}</select></div><button class="btn outline mt" id="export-xlsx">Download format lama</button></details>`;
    $('#report-year').onchange=e=>financePeriodChange(e,'reports');
    $('#report-month').onchange=e=>{financeMonth=Number(e.target.value);nav('reports')};
    $('#finance-export').onclick=async()=>{const btn=$('#finance-export');btn.disabled=true;try{const res=await api('/finance/export?'+params);const blob=await res.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='MHS_Rekap_Keuangan_'+(financeYear||'Semua_Tahun')+(financeMonth?'-'+String(financeMonth).padStart(2,'0'):'')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);toast('Laporan Excel berhasil dibuat')}catch(e){toast(e.message,true)}finally{btn.disabled=false}};
@@ -722,16 +749,52 @@ async function reportsPage(){
  setHead('Reports & Excel','Ekspor snapshot XLSX dengan data APPROVED saja');const [d,rows]=await Promise.all([json('/dashboard'),loadTx()]);$('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Ringkasan Pengeluaran</h3><div class="kpi" style="box-shadow:none;margin:15px 0"><small>APPROVED TOTAL</small><strong>${rp(d.total_cents)}</strong><span class="muted tiny">${d.receipt_count} kuitansi disetujui</span></div><div class="field"><label>Filter aktivitas</label><select id="report-activity">${opts(state.config.activities,null,'Semua aktivitas')}</select></div><button class="btn primary mt" id="export-xlsx">⬇ Download Excel (.xlsx)</button><p class="muted tiny">Berisi Transactions, Summary, dan Report Info. Histori ekspor tidak berubah setelah transaksi dikoreksi atau dibatalkan.</p></section><section class="panel panelpad"><h3>Kontrol Pelaporan</h3><div class="notice mt">Transaksi REVERSED, REJECTED, draft, dan PENDING_REVIEW tidak masuk total. Koreksi pending juga tidak mengubah nilai resmi.</div><p class="muted mt">Tautan kuitansi di Excel memerlukan login aktif sesuai hak akses pengguna.</p></section></div><section class="panel mt"><div class="panelhead"><h3>Data yang akan diekspor</h3></div>${txTable(rows.filter(t=>t.status==='APPROVED'),false)}</section>`;
  $('#export-xlsx').onclick=()=>{let a=$('#report-activity').value;window.location.href='/api/reports/export'+(a?'?activity_id='+encodeURIComponent(a):'')};
 }
-async function calendarPage(){setHead('Calendar & SLA','Hari kerja, verifikasi manual kalender, dan provisional SLA');let c=await json('/admin/calendar');let a=c.active;
- $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Status Kalender</h3><p>Versi kalender: <b>${a.version}</b></p><p>Zona waktu: <b>${h(a.timezone)}</b></p><p>Verifikasi: ${pill(a.verified?'FINAL':'PROVISIONAL')}</p><div class="notice mt">Default hari kerja Senin–Jumat 09.00–17.00 WIB. Kalender awal tidak terverifikasi; eskalasi otomatis diblokir. Sumber hari libur resmi perlu diverifikasi admin secara manual pada V0.1.</div></section><section class="panel panelpad"><h3>Stage Hari Libur (Manual)</h3><p class="muted tiny">Masukkan satu tanggal YYYY-MM-DD per baris. Verifikasi terhadap SKB pemerintah secara mandiri sebelum publish.</p><form id="holiday-form"><div class="field"><label>Sumber resmi / referensi SKB</label><input name="source" required placeholder="Contoh: SKB Pemerintah Indonesia ..."></div><div class="field mt"><label>Daftar hari libur</label><textarea name="holidays" placeholder="2026-12-25\n2027-01-01"></textarea></div><button class="btn primary mt">Stage Kalender</button></form></section></div><section class="panel mt"><div class="panelhead"><h3>Pending Calendar Imports</h3></div>${c.imports.length?c.imports.map(i=>`<div class="review-card"><div><strong>${h(i.source)}</strong><small>${h(i.status)} · ${h(i.year_start)}–${h(i.year_end)} · ${h(i.entries_json)}</small></div>${i.status==='STAGED'?`<button class="btn primary" data-publish="${i.id}">Verifikasi & Publish</button>`:pill(i.status)}</div>`).join(''):'<div class="empty">Belum ada impor kalender.</div>'}</section>`;
+async function calendarPage(){setHead('Calendar & SLA','Hari kerja, verifikasi manual kalender, dan provisional SLA');let c=await json('/admin/calendar');if(state.page!=='calendar')return;let a=c.active;
+ $('#page-content').innerHTML=`<button class="btn outline" data-nav="management">← Kembali ke Management</button><div class="grid2 mt"><section class="panel panelpad"><h3>Status Kalender</h3><p>Versi kalender: <b>${a.version}</b></p><p>Zona waktu: <b>${h(a.timezone)}</b></p><p>Verifikasi: ${pill(a.verified?'FINAL':'PROVISIONAL')}</p><div class="notice mt">Default hari kerja Senin–Jumat 09.00–17.00 WIB. Kalender awal tidak terverifikasi; eskalasi otomatis diblokir. Sumber hari libur resmi perlu diverifikasi admin secara manual pada V0.1.</div></section><section class="panel panelpad"><h3>Stage Hari Libur (Manual)</h3><p class="muted tiny">Masukkan satu tanggal YYYY-MM-DD per baris. Verifikasi terhadap SKB pemerintah secara mandiri sebelum publish.</p><form id="holiday-form"><div class="field"><label>Sumber resmi / referensi SKB</label><input name="source" required placeholder="Contoh: SKB Pemerintah Indonesia ..."></div><div class="field mt"><label>Daftar hari libur</label><textarea name="holidays" placeholder="2026-12-25\n2027-01-01"></textarea></div><button class="btn primary mt">Stage Kalender</button></form></section></div><section class="panel mt"><div class="panelhead"><h3>Pending Calendar Imports</h3></div>${c.imports.length?c.imports.map(i=>`<div class="review-card"><div><strong>${h(i.source)}</strong><small>${h(i.status)} · ${h(i.year_start)}–${h(i.year_end)} · ${h(i.entries_json)}</small></div>${i.status==='STAGED'?`<button class="btn primary" data-publish="${i.id}">Verifikasi & Publish</button>`:pill(i.status)}</div>`).join(''):'<div class="empty">Belum ada impor kalender.</div>'}</section>`;
  $('#holiday-form').onsubmit=async e=>{e.preventDefault();let fd=new FormData(e.currentTarget);try{await post('/admin/calendar/stage',{source:fd.get('source'),holidays:fd.get('holidays').split(/[\n,]+/).map(x=>x.trim()).filter(Boolean)});toast('Data kalender di-stage. Pastikan semua hari libur resmi benar.');await nav('calendar')}catch(ex){toast(ex.message,true)}};
 }
-async function managementPage(){setHead('Management','Kelola kegiatan dan kategori pengeluaran');
- $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas</h3><div class="mt">${state.config.activities.map(a=>`<div class="hint mb"><b>${h(a.name)}</b><div>${pill(a.closure_status)} <button class="btn outline" data-activity="${a.id}:${a.closure_status==='OPEN'?'CLOSED':'OPEN'}">${a.closure_status==='OPEN'?'Close':'Reopen'}</button></div></div>`).join('')}</div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori Pengeluaran</h3><div class="mt">${state.config.categories.map(c=>`<div class="hint mb">${h(c.name)}</div>`).join('')}</div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div>`;
- for(let [f,route] of [['act-form','/admin/activities'],['cat-form','/admin/categories']])$('#'+f).onsubmit=async e=>{e.preventDefault();let data=Object.fromEntries(new FormData(e.currentTarget));try{await post(route,data);toast('Data dibuat');state.config=await json('/config');await nav('management')}catch(ex){toast(ex.message,true)}};
+let masterBusy=false;
+async function managementPage(){
+ setHead('Management','Kelola aktivitas dan kategori pengeluaran');
+ const cfg=await json('/config');if(state.page!=='management')return;state.config=cfg;
+ const a=cfg.activities,c=cfg.categories;
+ $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas (${a.length})</h3><p class="tiny muted">Periode ditutup tetap menerima kuitansi dengan alasan keterlambatan dan review.</p><div class="field"><input id="activity-query" aria-label="Cari aktivitas" placeholder="Cari aktivitas..."></div><div id="activity-list" class="mt"></div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" maxlength="100" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori (${c.length})</h3><div class="field mt"><input id="category-query" aria-label="Cari kategori" placeholder="Cari kategori..."></div><div id="category-list" class="mt"></div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" maxlength="80" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div><details class="panel panelpad mt"><summary>Pengaturan lanjutan</summary><p class="muted">Kalender hari kerja dan SLA pemulihan transaksi.</p><button class="btn outline" data-nav="calendar">Calendar &amp; SLA</button></details>`;
+ const search=(items,q)=>items.filter(x=>x.name.toLowerCase().includes(q.trim().toLowerCase()));
+ const renderA=()=>{$('#activity-list').innerHTML=search(a,$('#activity-query').value).map(x=>`<div class="hint mb"><b>${h(x.name)}</b><p class="tiny">${h(x.status)} · ${pill(x.closure_status)}</p><button class="btn outline" data-activity="${h(x.id+':'+(x.closure_status==='OPEN'?'CLOSED':'OPEN'))}">${x.closure_status==='OPEN'?'Tutup periode':'Buka periode'}</button></div>`).join('')||'<p class="muted">Tidak ada aktivitas.</p>'};
+ const renderC=()=>{$('#category-list').innerHTML=search(c,$('#category-query').value).map(x=>`<div class="hint mb">${h(x.name)}</div>`).join('')||'<p class="muted">Tidak ada kategori.</p>'};
+ $('#activity-query').oninput=renderA;$('#category-query').oninput=renderC;renderA();renderC();
+ for(const [id,route,min,items] of [['act-form','/admin/activities',3,a],['cat-form','/admin/categories',2,c]])$('#'+id).onsubmit=async e=>{
+   e.preventDefault();if(masterBusy)return;
+   const form=e.currentTarget,name=String(new FormData(form).get('name')||'').trim();
+   if(name.length<min)return toast('Nama terlalu pendek.',true);
+   if(items.some(x=>x.name.trim().toLowerCase()===name.toLowerCase()))return toast('Nama sudah tersedia.',true);
+   const btn=form.querySelector('button');masterBusy=true;btn.disabled=true;
+   try{await post(route,{name});toast('Data dibuat');if(state.page==='management')await nav('management')}catch(err){toast(err.message,true)}finally{masterBusy=false;btn.disabled=false}
+ };
 }
-async function auditPage(){setHead('Audit Trail','Riwayat keputusan dan perubahan finansial');let logs=await json('/admin/audit');$('#page-content').innerHTML=`<section class="panel"><div class="panelhead"><h3>Recent Audit Events</h3><small>Terbaru lebih dahulu</small></div><div class="tablescroll"><table class="data-table"><thead><tr><th>WAKTU UTC</th><th>AKSI</th><th>OLEH</th><th>OBJEK</th><th>DETAIL</th></tr></thead><tbody>${logs.map(a=>`<tr><td class="nowrap">${short(a.created_at)}</td><td><b>${h(a.action)}</b></td><td>${h(a.actor_name||'SYSTEM')}</td><td>${h(a.target_type)}</td><td class="clamp" title="${h(a.details)}">${h(a.details)}</td></tr>`).join('')}</tbody></table></div></section>`}
-async function notificationsPage(){setHead('Notifications','Informasi transaksi dan keputusan');let ns=await json('/notifications');$('#page-content').innerHTML=`<section class="panel">${ns.length?ns.map(n=>`<div class="review-card"><div><strong>${h(n.type)}</strong><small>${h(n.message)} · ${short(n.created_at)}</small></div></div>`).join(''):'<div class="empty">Belum ada notifikasi.</div>'}</section>`}
+function workflowTime(v){
+  const d=new Date(v||'invalid');return Number.isNaN(d.getTime())?'—':d.toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'medium',timeZone:'Asia/Jakarta'});
+}
+function readableAudit(raw){try{return JSON.stringify(typeof raw==='string'?JSON.parse(raw):raw,null,2)||'—'}catch{return String(raw??'—')}}
+const actionNames={TRANSACTION_SUBMITTED:'Transaksi diajukan',ADMIN_APPROVED:'Disetujui admin',ADMIN_REJECTED:'Ditolak admin',TRANSACTION_REVERSED:'Persetujuan dibatalkan',REINSTATEMENT_REQUESTED:'Pemulihan diajukan',REINSTATEMENT_APPROVE:'Pemulihan disetujui',REINSTATEMENT_REJECT:'Pemulihan ditolak',CORRECTION_APPROVED:'Koreksi disetujui',CORRECTION_REJECTED:'Koreksi ditolak',DOCUMENT_UPLOADED:'Kuitansi diunggah',DOCUMENT_OPENED:'Kuitansi dibuka'};
+async function auditPage(){
+ setHead('Audit Trail','Riwayat keputusan dan perubahan finansial');
+ const logs=await json('/admin/audit');if(state.page!=='audit')return;
+ $('#page-content').innerHTML=`<section class="panel panelpad"><div class="field"><label>Cari kejadian</label><input id="audit-query" placeholder="Aksi, pelaku, objek, detail..."></div><p class="tiny muted" id="audit-count"></p></section><section class="panel mt" id="audit-results"></section>`;
+ const render=()=>{
+   const q=$('#audit-query').value.trim().toLowerCase();
+   const rows=logs.filter(x=>[x.action,actionNames[x.action],x.actor_name,x.target_type,x.target_id,readableAudit(x.details)].some(v=>String(v??'').toLowerCase().includes(q)));
+   $('#audit-count').textContent=rows.length+' dari '+logs.length+' kejadian terbaru (maks. 200 dari API). Waktu WIB.';
+   $('#audit-results').innerHTML=rows.length?`<div class="tablescroll"><table class="data-table"><thead><tr><th>WAKTU WIB</th><th>AKSI</th><th>OLEH</th><th>DETAIL</th></tr></thead><tbody>${rows.map(x=>`<tr><td class="nowrap">${h(workflowTime(x.created_at))}</td><td><b>${h(actionNames[x.action]||x.action)}</b><div class="tiny muted">${h(x.target_type)}</div></td><td>${h(x.actor_name||'SYSTEM')}</td><td><details><summary>Lihat detail</summary><div class="tiny" style="white-space:pre-wrap;overflow-wrap:anywhere">${h(readableAudit(x.details))}</div></details></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Tidak ada kejadian yang sesuai.</div>';
+ };
+ $('#audit-query').oninput=render;render();
+}
+const noticeNames={REVIEW:'Pemeriksaan transaksi',DECISION:'Keputusan transaksi',CORRECTION:'Koreksi transaksi',REVERSAL:'Pembatalan persetujuan',REINSTATEMENT:'Pemulihan transaksi'};
+async function notificationsPage(){
+ setHead('Notifications','Informasi transaksi dan keputusan');
+ const ns=await json('/notifications');if(state.page!=='notifications')return;
+ $('#page-content').innerHTML=`<section class="panel"><div class="panelhead"><h3>Notifikasi terbaru</h3><small>${ns.length} pesan (maks. 100)</small></div>${ns.length?ns.map(n=>`<div class="review-card"><div><strong>${h(noticeNames[n.type]||n.type)}</strong><p>${h(n.message)}</p><small>${h(workflowTime(n.created_at))} WIB</small></div>${state.me.role==='admin'&&n.type==='REVIEW'?'<button class="btn outline" data-nav="reviews">Review Queue</button>':''}</div>`).join(''):'<div class="empty">Belum ada notifikasi.</div>'}</section>`;
+}
 
 // Centralized delegated click handlers also work after page rerenders.
 document.addEventListener('click',async e=>{
@@ -747,7 +810,7 @@ document.addEventListener('click',async e=>{
  else if(el.dataset.review)await reviewAction(el.dataset.review);
  else if(el.dataset.reviewContext)await reviewAction(el.dataset.reviewContext);
  else if(el.dataset.publish){if(confirm('Sudah memverifikasi daftar hari libur ini dengan sumber pemerintah resmi?')){await post('/admin/calendar/'+el.dataset.publish+'/publish',{});toast('Kalender dipublikasikan; SLA provisional pending difinalkan');await nav('calendar')}}
- else if(el.dataset.activity){let [id,closure_status]=el.dataset.activity.split(':');await patch('/admin/activities/'+id,{closure_status});state.config=await json('/config');await nav('management')}
+ else if(el.dataset.activity){if(masterBusy)return;const [id,closure_status]=el.dataset.activity.split(':');if(!confirm(closure_status==='CLOSED'?'Tutup periode? Pengajuan berikutnya memerlukan alasan keterlambatan.':'Buka kembali periode?'))return;masterBusy=true;el.disabled=true;try{await patch('/admin/activities/'+id,{closure_status});toast('Periode diperbarui.');if(state.page==='management')await nav('management')}finally{masterBusy=false;el.disabled=false}}
  else if(el.dataset.escalate){let reason=prompt('Alasan eskalasi manual (minimal 5 karakter):');if(reason){await post('/admin/reinstatements/'+el.dataset.escalate+'/escalate',{reason});toast('Dikirim ke penugasan backup');await nav('reviews')}}
  else if(el.dataset.snooze){let reason=prompt('Alasan snooze reminder satu kali selama 24 jam kerja:');if(reason){await post('/admin/reinstatements/'+el.dataset.snooze+'/snooze',{reason});toast('Reminder ditunda tanpa mengubah SLA');await nav('reviews')}}
  }catch(err){toast(err.message,true)}
