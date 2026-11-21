@@ -17,4 +17,4 @@ def test_isolated_multi_role_workflows(tmp_path):
         cwd=Path(__file__).resolve().parents[1], env=env,
         capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
-    assert "16 passed" in result.stdout, result.stdout + "\n" + result.stderr
+    assert "17 passed" in result.stdout, result.stdout + "\n" + result.stderr
