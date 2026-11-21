@@ -60,6 +60,7 @@ async function dashboard(){
  const maxBar=4*Math.ceil((peak||400)/(4*step))*step;
  const drafts=finance?d.drafts:rows.filter(t=>t.status==='DRAFT').length;
  const pending=d.pending_review||0;
+ const recentApproved=rows.filter(t=>t.status==='APPROVED').slice(0,5);
  const shortRp=cents=>{
    const val=(cents||0)/100;
    if(val>=1e9)return 'Rp'+(val/1e9).toFixed(1)+'M';
@@ -178,13 +179,13 @@ async function dashboard(){
    <div class="chart-header" style="margin-bottom:10px">
      <div>
        <h3>Pengeluaran Terbaru</h3>
-       <small>Aktivitas keuangan yang terakhir dicatat</small>
+       <small>Transaksi pengeluaran yang sudah disetujui</small>
      </div>
      <button class="btn outline" style="border:none;color:#10b981;font-weight:700" data-nav="transactions">Lihat semua →</button>
    </div>
-   ${rows.length?`<div class="tablescroll"><table class="data-table">
+   ${recentApproved.length?`<div class="tablescroll"><table class="data-table">
      <thead><tr><th>TANGGAL</th><th>KETERANGAN</th><th>VENDOR</th><th>JENIS</th><th>NOMINAL</th><th>STATUS</th></tr></thead>
-     <tbody>${rows.slice(0,5).map(t=>`<tr>
+     <tbody>${recentApproved.map(t=>`<tr>
        <td class="nowrap">${h(t.transaction_date||'—')}</td>
        <td>
          <strong>${t.invoice_number?'No. Dokumen : '+h(t.invoice_number):h(t.description||'Belum diisi')}</strong>
@@ -195,7 +196,7 @@ async function dashboard(){
        <td class="nowrap"><strong>${fmtRp(t.amount_cents||0)}</strong></td>
        <td>${pill(t.status)}</td>
      </tr>`).join('')}</tbody>
-   </table></div>`:'<div class="empty">Belum ada transaksi tercatat.</div>'}
+   </table></div>`:'<div class="empty">Belum ada pengeluaran disetujui pada periode ini.</div>'}
  </section>`;
 
  if(finance){
@@ -309,44 +310,56 @@ async function reloadDraftBatch(){
   try{await loadTx();refreshDraftBatch();const retry=$('#draft-reload');if(retry)retry.hidden=true;return true}
   catch(err){console.warn('Draft refresh failed:',err.message);const retry=$('#draft-reload');if(retry)retry.hidden=false;return false}
 }
+let lastUploadActivity='';
+function preferredUploadActivity(activities,previous){
+ if(activities.some(a=>a.id===previous&&a.closure_status==='OPEN'))return previous;
+ const open=activities.filter(a=>a.closure_status==='OPEN');
+ return open.length===1?open[0].id:null;
+}
 async function uploadPage(){
-  setHead('Upload Receipt','Upload batch, baca kuitansi dengan Hybrid OCR, periksa data, lalu submit sebagian');
+  setHead('Upload Receipt','Unggah kuitansi, periksa data, lalu ajukan untuk pencatatan.');
   await loadTx();
   if(state.page!=='upload')return;
   const acts=state.config.activities;
   const drafts=state.transactions.filter(t=>t.status==='DRAFT');
   $('#page-content').innerHTML=`
-    <div class="two-panel">
+    <div class="owner-steps" aria-label="Alur pencatatan kuitansi"><div><b>01</b><span><strong>Unggah</strong><small>Pilih aktivitas dan kuitansi</small></span></div><div><b>02</b><span><strong>Periksa</strong><small>Lengkapi hasil pembacaan</small></span></div><div><b>03</b><span><strong>Ajukan</strong><small>Masuk antrean persetujuan</small></span></div></div>
+    <div class="two-panel owner-upload-panels">
       <section class="panel panelpad">
-        <h3>01. Pilih Aktivitas &amp; Upload</h3>
+        <h3>Unggah kuitansi</h3>
         <p class="muted">Satu kuitansi menghasilkan satu transaksi. PDF, PNG, JPEG, atau WEBP — maksimal 8 MB.</p>
         <form id="batch-form">
-          <div class="field mt"><label>Aktivitas*</label><select name="activity_id" required>${opts(acts,null,'Pilih aktivitas...')}</select></div>
+          <div class="field mt"><label>Aktivitas*</label><select name="activity_id" required>${opts(acts,preferredUploadActivity(acts,lastUploadActivity),'Pilih aktivitas...')}</select></div>
           <div class="uploadbox"><strong>↥ Upload kuitansi</strong>
             <p class="muted tiny">Boleh pilih beberapa file sekaligus. Setiap kuitansi disimpan sebagai draft.</p>
             <input id="upload-files" name="files" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple required>
           </div>
+          <p id="upload-file-summary" class="tiny muted" aria-live="polite">Belum ada file dipilih.</p>
           <div class="mt row wrap"><button class="btn primary" id="batch-upload-button" type="submit" ${ocrBusy?'disabled':''}>Upload &amp; Buat Draft →</button>
-            <span class="tiny muted">OCR lokal gambar dan PDF hingga 5 halaman; input manual selalu tersedia.</span></div>
+            <span class="tiny muted">Pembacaan otomatis gambar dan PDF hingga 5 halaman. Data yang kurang dapat diisi manual.</span></div>
           <p id="ocr-upload-progress" role="status" aria-live="polite" class="tiny muted mt">${h(uploadProgress)}</p>
         </form>
       </section>
-      <section class="panel panelpad"><h3>02. Periksa Hasil</h3>
+      <section class="panel panelpad"><h3>Setelah upload</h3>
         <p class="muted">Kuitansi yang siap dapat disubmit tanpa menunggu kuitansi lain.</p>
-        <div class="notice mt">Hasil OCR adalah saran, bukan data resmi. Periksa kuitansi asli dan pilih nominal/tanggal yang benar. Semua hasil OCR browser masih wajib melewati review admin pada mode demo.</div>
-        <div class="mt"><strong id="draft-batch-count">${drafts.length}</strong> draft aktif tersedia</div>
+        <div class="notice mt">Cocokkan nominal dan tanggal dengan kuitansi asli. Hasil pembacaan otomatis belum menjadi data resmi sebelum disetujui.</div>
+        <div class="owner-draft-total"><strong id="draft-batch-count">${drafts.length}</strong><span>draft aktif tersedia</span></div>
       </section>
     </div>
-    <section class="panel mt"><div class="panelhead"><div><h3>03. Draft Batch Review</h3><small>Pilih draft lengkap untuk submit; dapat dilakukan sebagian.</small></div><div class="inline-actions"><button class="btn outline" id="draft-select-ready" type="button">Pilih semua yang lengkap</button><button class="btn primary" id="submit-selected" disabled>Submit Terpilih →</button></div></div><div class="panelpad"><div id="draft-readiness" class="tiny muted"></div><div id="draft-selection-count" class="tiny" aria-live="polite"></div><button id="draft-reload" type="button" class="btn outline mt" hidden>Muat ulang daftar draft</button></div>
+    <section class="panel mt"><div class="panelhead"><div><h3>Draft Batch Review</h3><small>Pilih draft lengkap untuk submit; dapat dilakukan sebagian.</small></div><div class="inline-actions"><button class="btn outline" id="draft-select-ready" type="button">Pilih semua yang lengkap</button><button class="btn primary" id="submit-selected" disabled>Submit Terpilih →</button></div></div><div class="panelpad"><div id="draft-readiness" class="tiny muted"></div><div id="draft-selection-count" class="tiny" aria-live="polite"></div><button id="draft-reload" type="button" class="btn outline mt" hidden>Muat ulang daftar draft</button></div>
       <div id="draft-batch-grid" class="panelpad draftgrid">
       ${draftBatchRows(drafts)}
       </div>
     </section>`;
 
   const form=$('#batch-form');
+  const select=form.elements.activity_id,fileInput=form.elements.files,fileSummary=$('#upload-file-summary');
+  select.onchange=()=>{lastUploadActivity=select.value};
+  fileInput.onchange=()=>{const files=[...fileInput.files];fileSummary.textContent=files.length?files.length+' file dipilih · '+storageSize(files.reduce((n,f)=>n+f.size,0)):'Belum ada file dipilih.'};
   form.addEventListener('submit',async ev=>{
     ev.preventDefault();
     const activity_id=new FormData(form).get('activity_id');
+    lastUploadActivity=activity_id;
     const files=[...$('#upload-files').files];
     if(!files.length)return toast('Pilih kuitansi terlebih dahulu',true);
     if(files.some(f=>f.size>8*1024*1024 || !f.size))return toast('Setiap file harus terisi dan berukuran maksimum 8 MB.',true);
@@ -403,7 +416,7 @@ async function uploadPage(){
         state.ocrStatus.set(id,`${file.name}: Format tidak didukung OCR; isi manual.`);
       }
       const refreshed=await reloadDraftBatch();
-      if(form.isConnected&&successes.length){form.elements.files.value='';}
+      if(form.isConnected&&successes.length){form.elements.files.value='';fileSummary.textContent='Belum ada file dipilih.';}
       progress(`${successes.length} draft tersimpan; ${failures.length} gagal diunggah. ${refreshed?'Periksa hasil sebelum submit.':'Daftar belum tersinkron; gunakan Muat ulang daftar draft.'}`);
       toast(`${successes.length} draft berhasil dibuat${failures.length?`; ${failures.length} gagal diunggah`:''}. Periksa & Edit sebelum submit.`,!!failures.length);
       if(failures.length)console.warn('Upload gagal:',failures);
@@ -743,7 +756,7 @@ async function reportsPage(){
    if(state.page!=='reports')return;
    $('#page-content').innerHTML=`<div class="dash-toolbar"><div><h2>Rekap Keuangan MHS</h2><p>Periode yang sama dengan dashboard</p></div><div class="dash-toolbar-actions"><label class="finance-filter">Tahun <select id="report-year">${yearOptions(d)}</select></label><label class="finance-filter">Bulan <select id="report-month" ${financeYear===0?'disabled':''}><option value="0">Semua</option>${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'].map((m,i)=>`<option value="${i+1}" ${financeMonth===i+1?'selected':''}>${m}</option>`).join('')}</select></label></div></div>
    <div class="dash-kpi-grid">${[['Pemasukan',d.income_cents],['Pengeluaran',d.total_cents],['Selisih tercatat',d.net_cents]].map(([label,v])=>`<div class="dash-card"><div class="dash-card-title">${label}</div><div class="dash-val">${rp(v)}</div></div>`).join('')}</div>
-   <section class="panel panelpad mt"><h3>Unduh laporan periode</h3><p class="muted">Ringkasan, Semua Transaksi, Pemasukan, Pengeluaran, Report Info. Pengeluaran APPROVED dan pemasukan aktif saja.</p><button class="btn primary" id="finance-export">Download Excel (.xlsx)</button><p class="tiny muted">Snapshot tidak berubah setelah koreksi. Tautan kuitansi memerlukan login aktif pada server lokal. Bukan laporan pajak resmi.</p>${d.legacy_income_cents?`<div class="notice">Nilai lama tanpa tanggal ${rp(d.legacy_income_cents)} tidak dihitung.</div>`:''}</section>
+   <section class="panel panelpad mt owner-report-card"><div class="owner-report-intro"><div class="owner-file-icon" aria-hidden="true">XLSX</div><div><h3>Unduh laporan periode</h3><p class="muted">Ringkasan, Semua Transaksi, Pemasukan, Pengeluaran, dan Report Info.</p><p class="tiny muted">${h(d.receipt_count)} pengeluaran disetujui · ${h(d.income_count)} pemasukan aktif</p></div></div><button class="btn primary" id="finance-export">↓ Unduh Excel (.xlsx)</button><p class="tiny muted">Snapshot tidak berubah setelah koreksi. Tautan kuitansi memerlukan login aktif pada server lokal. Bukan laporan pajak resmi.</p>${d.legacy_income_cents?`<div class="notice">Nilai lama tanpa tanggal ${rp(d.legacy_income_cents)} tidak dihitung.</div>`:''}</section>
    <details class="panel panelpad mt"><summary>Format Excel lama (opsional)</summary><p class="muted">Format kompatibilitas lama, seluruh periode atau aktivitas terpilih; tidak memuat pemasukan.</p><div class="field"><label>Aktivitas</label><select id="report-activity">${opts(state.config.activities,null,'Semua aktivitas')}</select></div><button class="btn outline mt" id="export-xlsx">Download format lama</button></details>`;
    $('#report-year').onchange=e=>financePeriodChange(e,'reports');
    $('#report-month').onchange=e=>{financeMonth=Number(e.target.value);nav('reports')};
