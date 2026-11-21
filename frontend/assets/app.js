@@ -21,8 +21,34 @@ async function post(path,obj){return json(path,{method:'POST',body:JSON.stringif
 async function patch(path,obj){return json(path,{method:'PATCH',body:JSON.stringify(obj)});}
 function toast(msg,bad=false){const t=$('#toast');t.innerText=msg;t.style.display='block';t.style.borderLeft='4px solid '+(bad?'#ef6262':'#f4831e');setTimeout(()=>{if(t.innerText===msg)t.style.display='none'},5500)}
 function showLogin(){$('#login-screen').classList.remove('hidden');$('#app').classList.add('hidden')}
-function showApp(){$('#login-screen').classList.add('hidden');$('#app').classList.remove('hidden');$('#role-chip').innerText=state.me.role.toUpperCase();$('#avatar').innerText=state.me.name[0].toUpperCase();$('#today').innerText=new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'});renderNav()}
-function renderNav(){let items=state.me.role==='admin'?navAdmin:navUploader;$('#navigation').innerHTML=items.map(([id,icon,name])=>`<button class="navbutton ${id===state.page?'active':''}" data-nav="${id}"><span class="navicon">${icon}</span>${h(name)}</button>`).join('')}
+const navigationIcons={
+ dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/><rect x="14" y="14" width="7" height="7" rx="1.2"/>',
+ upload:'<path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/>',
+ reviews:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="m8 12 2 2 5-5M8 17h8"/>',
+ transactions:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11M15 9v11M3 14h18"/>',
+ reports:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 17l3-4 3 4m-6-4 3 4 3-4"/>',
+ management:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/><circle cx="12" cy="12" r="7"/>',
+ audit:'<path d="M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5m4-1v5l3 2"/>',
+ notifications:'<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12a2 2 0 0 0 4 0"/>'
+};
+function navigationIcon(id){
+ return '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'+(navigationIcons[id]||navigationIcons.management)+'</svg>';
+}
+function showApp(){
+ $('#login-screen').classList.add('hidden');$('#app').classList.remove('hidden');
+ $('#role-chip').innerText=state.me.role.toUpperCase();
+ const name=String(state.me.name||'Pengguna').trim()||'Pengguna';
+ $('#avatar').innerText=name[0].toUpperCase();
+ const profile=$('#profile-name');if(profile)profile.textContent=name;
+ $('#today').innerText=new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Asia/Jakarta'});
+ renderNav();
+}
+function renderNav(){
+ const items=state.me.role==='admin'?navAdmin:navUploader;
+ const primary=new Set(['dashboard','upload','reviews','transactions','reports']);
+ const button=([id,icon,name])=>`<button type="button" class="navbutton ${id===state.page?'active':''}" data-nav="${id}" ${id===state.page?'aria-current="page"':''}><span class="navicon">${navigationIcon(id)}</span><span class="navlabel">${h(name)}</span></button>`;
+ $('#navigation').innerHTML=items.filter(x=>primary.has(x[0])).map(button).join('')+'<div class="nav-section" aria-hidden="true">PENGELOLAAN</div>'+items.filter(x=>!primary.has(x[0])).map(button).join('');
+}
 function setHead(name,desc){$('#page-title').innerText=name;$('#page-desc').innerText=desc;$('#crumb-title').innerText=name}
 const pill=s=>`<span class="pill ${h(s)}">${h(s?.replaceAll('_',' ')||'—')}</span>`;
 function modal(title,body,foot=''){ $('#dialog-title').innerText=title;$('#dialog-body').innerHTML=body;$('#dialog-foot').innerHTML=foot;$('#dialog-overlay').classList.remove('hidden') }
@@ -35,7 +61,7 @@ function txTable(rows,showActions=true){
  return `<div class="tablescroll"><table class="data-table"><thead><tr><th>TANGGAL</th><th>KETERANGAN</th><th>AKTIVITAS</th><th>KATEGORI</th><th>NOMINAL</th><th>STATUS</th>${showActions?'<th>AKSI</th>':''}</tr></thead><tbody>${rows.map(t=>`<tr><td class="nowrap">${h(t.transaction_date||'—')}</td><td><strong class="clamp" title="${h(t.description||'Belum diisi')}">${h(t.description||'Belum diisi')}</strong><div class="tiny muted">${h(t.uploader_name||'')} ${t.correction_pending?'· Koreksi pending':t.reinstatement_pending?'· Pemulihan pending':''}</div></td><td>${h(t.activity_name||'')}</td><td>${h(t.category_name||'—')}</td><td class="nowrap"><strong>${rp(t.amount_cents)}</strong></td><td>${pill(t.status)}</td>${showActions?`<td><div class="inline-actions"><button class="btn outline" data-detail="${t.id}">Detail</button>${t.status==='DRAFT'?`<button class="btn soft" data-edit="${t.id}">Edit</button>`:''}${['APPROVED','PENDING_REVIEW','REJECTED'].includes(t.status)&&!t.correction_pending?`<button class="btn outline" data-correction="${t.id}">Koreksi</button>`:''}${t.status==='REVERSED'&&!t.reinstatement_pending?`<button class="btn soft" data-reinstate="${t.id}">Reinstatement</button>`:''}${state.me.role==='admin'&&t.status==='APPROVED'?`<button class="btn danger" data-reverse="${t.id}">Reverse</button>`:''}</div></td>`:''}</tr>`).join('')}</tbody></table></div>`;
 }
 async function nav(page){
- state.page=page;renderNav();$('#sidebar').classList.remove('open');$('#mobile-mask').classList.add('hidden');
+ state.page=page;renderNav();setMobileNav(false);
  try{
  if(page==='dashboard')await dashboard();else if(page==='upload')await uploadPage();else if(page==='transactions')await transactionsPage();else if(page==='reviews')await reviewsPage();else if(page==='reports')await reportsPage();else if(page==='calendar')await calendarPage();else if(page==='management')await managementPage();else if(page==='audit')await auditPage();else if(page==='notifications')await notificationsPage();
  }catch(e){toast(e.message,true);$('#page-content').innerHTML=`<div class="notice danger-notice">${h(e.message)}</div>`}
@@ -923,8 +949,13 @@ document.addEventListener('click',async e=>{
  }catch(err){toast(err.message,true)}
 });
 $('#dialog-close').onclick=closeModal;$('#dialog-overlay').addEventListener('click',e=>{if(e.target.id==='dialog-overlay')closeModal()});
-$('#mobile-toggle').onclick=()=>{$('#sidebar').classList.add('open');$('#mobile-mask').classList.remove('hidden')};
-$('#mobile-mask').onclick=()=>{$('#sidebar').classList.remove('open');$('#mobile-mask').classList.add('hidden')};
+function setMobileNav(open){
+ $('#sidebar').classList.toggle('open',open);
+ $('#mobile-mask').classList.toggle('hidden',!open);
+ $('#mobile-toggle').setAttribute('aria-expanded',String(open));
+}
+$('#mobile-toggle').onclick=()=>setMobileNav(!$('#sidebar').classList.contains('open'));
+$('#mobile-mask').onclick=()=>setMobileNav(false);
 $('#logout').onclick=async()=>{try{await post('/auth/logout',{})}catch(e){}state.me=null;showLogin()};
 for(let button of document.querySelectorAll('[data-demo]'))button.onclick=()=>{let accounts={admin:['admin@mhs.local','AdminDemo123!']};let [email,password]=accounts[button.dataset.demo];$('#login-form [name=email]').value=email;$('#login-form [name=password]').value=password};
 if($('#login-form')) $('#login-form').onsubmit=async e=>{e.preventDefault();const email=$('#login-form [name=email]').value,password=$('#login-form [name=password]').value;try{let r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password}),credentials:'same-origin'});if(!r.ok)throw new Error('Email atau password salah');state.me=await json('/me');state.config=await json('/config');showApp();await nav('dashboard');toast('Berhasil masuk sebagai '+state.me.role)}catch(err){toast(err.message,true)}};
