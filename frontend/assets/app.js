@@ -20,7 +20,27 @@ async function json(path,opts={}){let r=await api(path,opts);return r.json();}
 async function post(path,obj){return json(path,{method:'POST',body:JSON.stringify(obj)});}
 async function patch(path,obj){return json(path,{method:'PATCH',body:JSON.stringify(obj)});}
 function toast(msg,bad=false){const t=$('#toast');t.innerText=msg;t.style.display='block';t.style.borderLeft='4px solid '+(bad?'#ef6262':'#f4831e');setTimeout(()=>{if(t.innerText===msg)t.style.display='none'},5500)}
-function showLogin(){$('#login-screen').classList.remove('hidden');$('#app').classList.add('hidden')}
+let wibClockTimer=null;
+const wibTimeFormat=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Jakarta',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+const wibDateFormat=new Intl.DateTimeFormat('id-ID',{timeZone:'Asia/Jakarta',weekday:'long',day:'numeric',month:'long',year:'numeric'});
+function wibClockParts(now){
+ return {time:wibTimeFormat.format(now),date:wibDateFormat.format(now)};
+}
+function updateWibClock(){
+ const clock=$('#wib-clock'),date=$('#today');if(!clock||!date)return;
+ const wib=wibClockParts(new Date());
+ clock.textContent=wib.time;
+ if(date.textContent!==wib.date)date.textContent=wib.date;
+}
+function startWibClock(){
+ stopWibClock();updateWibClock();
+ wibClockTimer=setInterval(updateWibClock,1000);
+}
+function stopWibClock(){
+ if(wibClockTimer!==null){clearInterval(wibClockTimer);wibClockTimer=null}
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&wibClockTimer!==null)updateWibClock()});
+function showLogin(){stopWibClock();$('#login-screen').classList.remove('hidden');$('#app').classList.add('hidden')}
 const navigationIcons={
  dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/><rect x="14" y="14" width="7" height="7" rx="1.2"/>',
  upload:'<path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/>',
@@ -40,7 +60,7 @@ function showApp(){
  const name=String(state.me.name||'Pengguna').trim()||'Pengguna';
  $('#avatar').innerText=name[0].toUpperCase();
  const profile=$('#profile-name');if(profile)profile.textContent=name;
- $('#today').innerText=new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Asia/Jakarta'});
+ startWibClock();
  renderNav();
 }
 function renderNav(){
