@@ -84,3 +84,22 @@
 .bar-pair{gap:2px}
 .month-lbl{font-size:10px}
 .chart-legend{flex-wrap:wrap}
+
+/* Period navigation and aligned currency chart */
+.finance-filter select{max-width:145px}
+.finance-chart-scroll{overflow-x:auto}
+.finance-chart{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px}
+.finance-axis{height:180px;display:flex;flex-direction:column;justify-content:space-between;text-align:right;color:#64748b;font-size:11px;line-height:1;transform:translateY(-5px)}
+.finance-plot{position:relative;min-width:0}
+.finance-gridlines{position:absolute;inset:0 0 auto;height:180px;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none}
+.finance-gridlines i{border-top:1px solid #e2e8f0}
+.finance-bars{position:relative;display:grid;gap:4px}
+.finance-bars .month-col{height:auto;min-width:0}
+.finance-bar-pair{height:180px;display:flex;align-items:flex-end;justify-content:center;gap:4px;width:100%}
+.finance-bar-pair .bar-in,.finance-bar-pair .bar-out{width:clamp(6px,2vw,22px);max-width:40%}
+.tx-compact .data-table{min-width:0}
+.tx-compact .data-table th,.tx-compact .data-table td{padding:9px 7px;vertical-align:top}
+.tx-compact .data-table .clamp{white-space:normal;overflow-wrap:anywhere;max-width:180px}
+.tx-compact .inline-actions{gap:3px}
+.tx-compact .inline-actions .btn{padding:5px 7px}
+@media(max-width:700px){.tx-compact .data-table{min-width:620px}}
