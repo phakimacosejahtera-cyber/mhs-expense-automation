@@ -227,20 +227,24 @@ async function dashboard(){
 // app's load time and keeps OCR processing out of the backend Gemini code path.
 let ocrBundlePromise=null;
 function loadBrowserOCR(){
-  if(window.MHSReceiptOCR)return Promise.resolve(window.MHSReceiptOCR);
+  if(window.MHSReceiptOCR?.release==='phase3-final')return Promise.resolve(window.MHSReceiptOCR);
   if(!ocrBundlePromise){
     ocrBundlePromise=new Promise((resolve,reject)=>{
       const script=document.createElement('script');
-      script.src='/assets/ocr-engine.bundle.js';
-      script.onload=()=>window.MHSReceiptOCR ? resolve(window.MHSReceiptOCR) : reject(new Error('Bundle OCR tidak menyiapkan mesin Tesseract.'));
-      script.onerror=()=>reject(new Error('Bundle OCR belum dibangun. Jalankan npm.cmd exec -- esbuild .\\ocr-engine-entry.js --bundle --platform=browser --format=iife --outfile=.\\assets\\ocr-engine.bundle.js dari folder frontend.'));
+      script.src='/assets/ocr-engine.final.bundle.js';
+      script.onload=()=>window.MHSReceiptOCR?.release==='phase3-final' ? resolve(window.MHSReceiptOCR) : reject(new Error('Bundle OCR tidak menyiapkan mesin Tesseract.'));
+      script.onerror=()=>reject(new Error('Bundle OCR belum dibangun. Jalankan npm.cmd exec -- esbuild .\\ocr-engine-entry.js --bundle --platform=browser --format=iife --outfile=.\\assets\\ocr-engine.final.bundle.js dari folder frontend.'));
       document.head.appendChild(script);
     }).catch(err=>{ocrBundlePromise=null;throw err});
   }
   return ocrBundlePromise;
 }
 
-function isImageOCRFile(file){return ['image/png','image/jpeg','image/webp'].includes(String(file?.type||'').toLowerCase())}
+function isImageOCRFile(file){return ['image/png','image/jpeg','image/webp','application/pdf'].includes(String(file?.type||'').toLowerCase())}
+async function recognizeReceipt(engine,file,id,progress,deep=false){
+  if(file.type==='application/pdf')return engine.recognizePdf((page,raster)=>json('/transactions/'+encodeURIComponent(id)+'/pdf-ocr-page?page='+page+'&raster='+raster),progress,{deep});
+  return engine.recognize(file,progress,{deep});
+}
 
 async function uploadPage(){
   setHead('Upload Receipt','Upload batch, baca kuitansi dengan Tesseract.js, periksa data, lalu submit sebagian');
@@ -259,7 +263,7 @@ async function uploadPage(){
             <input id="upload-files" name="files" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple required>
           </div>
           <div class="mt row wrap"><button class="btn primary" id="batch-upload-button" type="submit">Upload &amp; Buat Draft →</button>
-            <span class="tiny muted">Tesseract.js untuk gambar; PDF dan OCR gagal tetap bisa diisi manual.</span></div>
+            <span class="tiny muted">OCR lokal gambar dan PDF hingga 5 halaman; input manual selalu tersedia.</span></div>
           <p id="ocr-upload-progress" role="status" aria-live="polite" class="tiny muted mt"></p>
         </form>
       </section>
@@ -320,7 +324,7 @@ async function uploadPage(){
           for(const {file,id} of images){
             count++;
             try{
-              const result=await ocr.recognize(file,(status,pct)=>progress(`OCR ${count}/${images.length} — ${file.name}: ${status}${pct===null?'':' '+pct+'%'}`));
+              const result=await recognizeReceipt(ocr,file,id,(status,pct)=>progress(`OCR ${count}/${images.length} — ${file.name}: ${status}${pct===null?'':' '+pct+'%'}`));
               state.ocrResults.set(id,result);
               state.ocrStatus.set(id,'Teks terbaca; belum diverifikasi — buka Periksa & Edit');
               try{
@@ -339,7 +343,7 @@ async function uploadPage(){
         }
       }
       for(const {file,id} of successes.filter(x=>!isImageOCRFile(x.file)))
-        state.ocrStatus.set(id,`${file.name}: PDF belum didukung OCR browser; isi manual.`);
+        state.ocrStatus.set(id,`${file.name}: Format tidak didukung OCR; isi manual.`);
       await nav('upload');
       toast(`${successes.length} draft berhasil dibuat${failures.length?`; ${failures.length} gagal diunggah`:''}. Periksa & Edit sebelum submit.`,!!failures.length);
       if(failures.length)console.warn('Upload gagal:',failures);
@@ -366,7 +370,7 @@ async function uploadPage(){
 // OCR evidence is never an instruction or a verified accounting value.
 let ocrBusy=false;
 function renderOCREvidence(result){
-  if(!result)return '<p class="tiny">Belum ada hasil OCR. Isi manual atau coba baca ulang gambar asli.</p>';
+  if(!result)return '<p class="tiny">Belum ada hasil OCR. Isi manual atau coba baca ulang dokumen asli.</p>';
   const suggestions=result.suggestions||{};
   const labelled=Array.isArray(result.labelled_amounts)?result.labelled_amounts:[];
   const amounts=Array.isArray(suggestions.amounts)?suggestions.amounts:[];
@@ -402,7 +406,7 @@ async function editDraft(id){
   let result=state.ocrResults.get(id);
   try{result=await json('/transactions/'+id+'/ocr-result');state.ocrResults.set(id,result)}
   catch(err){if(!result)result=null}
-  const ocrPanel=`<div class="notice" style="grid-column:1/-1"><b>Saran OCR — BELUM DIVERIFIKASI</b><div id="ocr-evidence">${renderOCREvidence(result)}</div><div class="mt row wrap"><button type="button" class="btn outline" id="retry-ocr">Baca ulang gambar</button><span class="tiny" id="retry-ocr-status" role="status"></span></div></div>`;
+  const ocrPanel=`<div class="notice" style="grid-column:1/-1"><b>Saran OCR — BELUM DIVERIFIKASI</b><div id="ocr-evidence">${renderOCREvidence(result)}</div><div class="mt row wrap"><button type="button" class="btn outline" id="retry-ocr">Baca ulang dokumen (mendalam)</button><span class="tiny" id="retry-ocr-status" role="status"></span></div></div>`;
   let existingRisks=[];try{existingRisks=JSON.parse(t.risk_reasons||'[]')}catch{}
   const mixed=existingRisks.some(x=>/beberapa kategori/i.test(x));
   const body=`<div class="notice">Semua hasil OCR merupakan saran. Data resmi belum berubah sampai kamu menyimpan draft dan mengikuti approval.</div>
@@ -442,11 +446,11 @@ async function editDraft(id){
       const response=await api('/receipts/'+encodeURIComponent(t.document_id));
       const blob=await response.blob();
       const type=blob.type.split(';')[0].toLowerCase();
-      if(!['image/png','image/jpeg','image/webp'].includes(type))throw new Error('Baca ulang saat ini hanya mendukung gambar JPG/PNG/WebP. PDF tetap manual.');
+      if(!['image/png','image/jpeg','image/webp','application/pdf'].includes(type))throw new Error('Format dokumen tidak didukung.');
       if(blob.size>8*1024*1024||!blob.size)throw new Error('Ukuran dokumen tidak didukung.');
       engine=await loadBrowserOCR();
-      const file=new File([blob],'receipt.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}[type]),{type});
-      const result=await engine.recognize(file,(msg,pct)=>{status.textContent=msg+(pct===null?'':' '+pct+'%')});
+      const file=new File([blob],'receipt.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','application/pdf':'pdf'}[type]),{type});
+      const result=await recognizeReceipt(engine,file,id,(msg,pct)=>{status.textContent=msg+(pct===null?'':' '+pct+'%')},true);
       await post('/transactions/'+id+'/ocr-result',{text:result.text.slice(0,16000),confidence:result.confidence,suggestions:result.suggestions});
       const enriched=await json('/transactions/'+id+'/ocr-result');
       state.ocrResults.set(id,enriched);
