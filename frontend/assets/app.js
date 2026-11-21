@@ -372,12 +372,11 @@ let ocrBusy=false;
 function renderOCREvidence(result){
   if(!result)return '<p class="tiny">Belum ada hasil OCR. Isi manual atau coba baca ulang dokumen asli.</p>';
   const suggestions=result.suggestions||{};
-  const labelled=Array.isArray(result.labelled_amounts)?result.labelled_amounts:[];
-  const amounts=Array.isArray(suggestions.amounts)?suggestions.amounts:[];
-  const kindNames={bruto:'Bruto / insentif',neto:'Neto / diterima',total:'Total',potongan_pajak:'Potongan pajak'};
+  const money=Array.isArray(result.amount_review)?result.amount_review:[];
+  const warnings=Array.isArray(result.amount_warnings)?result.amount_warnings:[];
+  const kindNames={bruto:'Bruto / insentif',neto:'Neto / diterima',total:'Total',potongan_pajak:'Potongan pajak',terbilang:'Terbilang',generic:'Angka tanpa label pasti'};
   const valid=x=>x&&Number.isFinite(Number(x.value))&&Number(x.value)>0&&Number(x.value)<=999999999999;
-  const money=[...labelled.filter(valid),...amounts.filter(x=>valid(x)&&!labelled.some(y=>Number(y.value)===Number(x.value)))];
-  const moneyRows=money.map(x=>`<div class="ocr-evidence-row"><div><b>${h(kindNames[x.kind]||'Kandidat nominal')} · ${rp(Math.round(Number(x.value)*100))}</b><small>${h(x.label||'Periksa dokumen asli')}</small></div>${x.kind==='potongan_pajak'?'<span class="tiny">Informasi pajak</span>':`<button type="button" class="btn soft" data-ocr-amount="${h(x.value)}">Pakai</button>`}</div>`).join('');
+  const moneyRows=money.filter(valid).map(x=>`<div class="ocr-evidence-row"><div><b>${h(kindNames[x.kind]||'Kandidat nominal')} · ${rp(Math.round(Number(x.value)*100))}</b><small>${h(x.label||'Periksa dokumen asli')}</small><small>${h(x.reason||'Periksa manual')}</small></div>${x.usable===true?`<button type="button" class="btn soft" data-ocr-amount="${h(x.value)}">Pakai</button>`:'<span class="tiny">Periksa manual</span>'}</div>`).join('');
   const dates=(Array.isArray(suggestions.dates)?suggestions.dates:[]).filter(x=>typeof x==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(x));
   const dateRows=dates.map(x=>`<button type="button" class="btn soft" data-ocr-date="${h(x)}">Pakai ${h(x)}</button>`).join(' ');
   const context=Array.isArray(result.date_context)?result.date_context:[];
@@ -389,9 +388,10 @@ function renderOCREvidence(result){
   }).join('');
   // Keyword suggestions come exclusively from explicit description candidates.
   const descriptions=(Array.isArray(fields.description)?fields.description:[]).join(' ');
-  const categoryRules=[[/\b(?:laptop|komputer|printer|alat\s+tulis|atk)\b/i,'Peralatan Kantor / IT'],[/\b(?:honorarium|insentif)\b/i,'Honorarium / Insentif'],[/\b(?:transportasi|taksi|parkir|tol)\b/i,'Transportasi']];
+  const categoryRules=[[/\b(?:laptop|notebook|komputer|printer|alat\s+tulis|atk)\b/i,'Peralatan Kantor / IT'],[/\b(?:honorarium|insentif)\b/i,'Honorarium / Insentif'],[/\b(?:transportasi|taksi|parkir|tol)\b/i,'Transportasi']];
   const cats=categoryRules.filter(([rx])=>rx.test(descriptions)).map(([,name])=>state.config.categories.find(c=>c.name===name)).filter(Boolean);
   return `<p class="tiny">Cocokkan setiap saran dengan dokumen asli. Bruto, neto, dan potongan pajak bukan nilai yang dapat dipertukarkan.</p>
+   ${warnings.length?`<div class="ocr-context"><b>Periksa nominal</b>${warnings.map(x=>`<p>${h(x)}</p>`).join('')}</div>`:''}
    <b class="tiny">Kandidat nominal</b>${moneyRows||'<p class="tiny muted">Tidak terdeteksi. Isi manual.</p>'}
    <b class="tiny">Kandidat tanggal</b><div class="row wrap" style="gap:6px">${dateRows||'<span class="tiny muted">Tidak terdeteksi. Isi manual.</span>'}</div>
    ${context.length?`<div class="ocr-context"><b>Tanggal referensi surat mungkin bukan tanggal pembayaran.</b>${context.map(x=>`<p>${h(x)}</p>`).join('')}</div>`:''}
