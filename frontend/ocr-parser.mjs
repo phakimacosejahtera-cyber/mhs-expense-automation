@@ -16,11 +16,11 @@ function dateISO(y,m,d) {
 export function parseDates(rawText='') {
   const text=String(rawText);
   const values=new Set(); let match;
-  const iso=/\b(20\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/g;
+  const iso=/\b((?:19|20)\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/g;
   while((match=iso.exec(text))){const v=dateISO(match[1],match[2],match[3]);if(v)values.add(v)}
-  const dmy=/\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](20\d{2})\b/g;
+  const dmy=/\b(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.]((?:19|20)\d{2})\b/g;
   while((match=dmy.exec(text))){const v=dateISO(match[3],match[2],match[1]);if(v)values.add(v)}
-  const named=/\b(0?[1-9]|[12]\d|3[01])\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|jun|jul|agu|agt|sep|okt|nov|des)\s+(20\d{2})\b/gi;
+  const named=/\b(0?[1-9]|[12]\d|3[01])\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|jun|jul|agu|agt|sep|okt|nov|des)\s+((?:19|20)\d{2})\b/gi;
   while((match=named.exec(text))){const v=dateISO(match[3],months[match[2].toLowerCase()],match[1]);if(v)values.add(v)}
   return [...values].sort();
 }
