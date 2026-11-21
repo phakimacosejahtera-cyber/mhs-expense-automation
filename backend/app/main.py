@@ -378,7 +378,8 @@ def read_browser_ocr(request:Request,txid:str):
         own_or_admin(u,t['uploader_id'])
         row=one(c,"SELECT raw_json FROM extraction_runs WHERE document_id=? AND provider='TESSERACT_JS_CLIENT' ORDER BY created_at DESC, rowid DESC LIMIT 1",(t['document_id'],))
         if not row:raise HTTPException(404,'Belum ada hasil OCR Tesseract.js')
-        return json.loads(row['raw_json'])
+        from .ocr_candidates import enrich_observation
+        return enrich_observation(json.loads(row['raw_json']))
 
 class DraftData(BaseModel):
     transaction_date:str|None=None;amount:str|int|float|None=None;description:str|None=None
