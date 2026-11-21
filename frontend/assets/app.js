@@ -267,6 +267,7 @@ function draftReady(t){return t.status==='DRAFT'&&!uploadPending.has(t.id)&&!dra
 function updateDraftControls(){
   const grid=$('#draft-batch-grid');if(!grid||state.page!=='upload')return;
   const drafts=state.transactions.filter(t=>t.status==='DRAFT'),ready=drafts.filter(draftReady);
+  for(const box of grid.querySelectorAll('.select-draft')){const t=drafts.find(x=>x.id===box.value);box.disabled=draftSubmitting||!t||!draftReady(t)}
   const checked=[...grid.querySelectorAll('.select-draft:checked:not(:disabled)')];
   const stats=$('#draft-readiness');if(stats)stats.textContent=ready.length+' lengkap · '+drafts.filter(t=>uploadPending.has(t.id)).length+' diproses OCR · '+drafts.filter(t=>!uploadPending.has(t.id)&&draftMissing(t).length).length+' belum lengkap';
   const count=$('#draft-selection-count');if(count)count.textContent=checked.length+' dipilih';
@@ -280,8 +281,8 @@ function draftBatchRows(drafts,selected=new Set()){
         const ocr=state.ocrStatus.get(t.id);
         const pending=uploadPending.has(t.id);
         const missing=draftMissing(t);const ready=draftReady(t);
-        return `<div class="draft-item"><div class="details"><label class="checkrow"><input type="checkbox" class="select-draft" value="${h(t.id)}" ${!ready||draftSubmitting?'disabled':selected.has(t.id)?'checked':''}><strong>${h(t.description||'Draft kuitansi')}</strong></label>
-          <p>${h(t.activity_name)} • ${rp(t.amount_cents)} • ${h(t.transaction_date||'Tanggal belum diisi')}</p>
+        return `<div class="draft-item"><div class="details"><label class="checkrow"><input type="checkbox" class="select-draft" value="${h(t.id)}" ${!ready?'disabled':(draftSubmitting?'disabled ':'')+(selected.has(t.id)?'checked':'')}><strong>${h(t.description||'Draft kuitansi')}</strong></label>
+          <p>${h(t.activity_name)} • ${t.amount_cents==null?'Nominal belum diisi':rp(t.amount_cents)} • ${h(t.transaction_date||'Tanggal belum diisi')}</p>
           <div>${pill(t.status)} ${risks.map(x=>`<span class="pill PENDING">${h(x)}</span>`).join('')}</div>
           <p class="tiny"><b>${pending?'Sedang diproses':ready?'Data wajib lengkap — siap diajukan':'Belum lengkap: '+h(missing.join(', '))}</b></p>
           ${ocr?`<p class="tiny muted">OCR: ${h(ocr)}</p>`:''}</div>
@@ -305,8 +306,8 @@ function updateUploadProgress(message){
   }
 }
 async function reloadDraftBatch(){
-  try{await loadTx();refreshDraftBatch();return true}
-  catch(err){console.warn('Draft refresh failed:',err.message);return false}
+  try{await loadTx();refreshDraftBatch();const retry=$('#draft-reload');if(retry)retry.hidden=true;return true}
+  catch(err){console.warn('Draft refresh failed:',err.message);const retry=$('#draft-reload');if(retry)retry.hidden=false;return false}
 }
 async function uploadPage(){
   setHead('Upload Receipt','Upload batch, baca kuitansi dengan Hybrid OCR, periksa data, lalu submit sebagian');
@@ -336,7 +337,7 @@ async function uploadPage(){
         <div class="mt"><strong id="draft-batch-count">${drafts.length}</strong> draft aktif tersedia</div>
       </section>
     </div>
-    <section class="panel mt"><div class="panelhead"><div><h3>03. Draft Batch Review</h3><small>Pilih draft lengkap untuk submit; dapat dilakukan sebagian.</small></div><div class="inline-actions"><button class="btn outline" id="draft-select-ready" type="button">Pilih semua yang lengkap</button><button class="btn primary" id="submit-selected" disabled>Submit Terpilih →</button></div></div><div class="panelpad"><div id="draft-readiness" class="tiny muted"></div><div id="draft-selection-count" class="tiny" aria-live="polite"></div></div>
+    <section class="panel mt"><div class="panelhead"><div><h3>03. Draft Batch Review</h3><small>Pilih draft lengkap untuk submit; dapat dilakukan sebagian.</small></div><div class="inline-actions"><button class="btn outline" id="draft-select-ready" type="button">Pilih semua yang lengkap</button><button class="btn primary" id="submit-selected" disabled>Submit Terpilih →</button></div></div><div class="panelpad"><div id="draft-readiness" class="tiny muted"></div><div id="draft-selection-count" class="tiny" aria-live="polite"></div><button id="draft-reload" type="button" class="btn outline mt" hidden>Muat ulang daftar draft</button></div>
       <div id="draft-batch-grid" class="panelpad draftgrid">
       ${draftBatchRows(drafts)}
       </div>
@@ -401,9 +402,9 @@ async function uploadPage(){
         uploadPending.delete(id);
         state.ocrStatus.set(id,`${file.name}: Format tidak didukung OCR; isi manual.`);
       }
-      await reloadDraftBatch();
-      if(form.isConnected)form.reset();
-      progress(`${successes.length} draft tersimpan; proses OCR selesai. Periksa hasil sebelum submit.`);
+      const refreshed=await reloadDraftBatch();
+      if(form.isConnected&&successes.length){form.elements.files.value='';}
+      progress(`${successes.length} draft tersimpan; ${failures.length} gagal diunggah. ${refreshed?'Periksa hasil sebelum submit.':'Daftar belum tersinkron; gunakan Muat ulang daftar draft.'}`);
       toast(`${successes.length} draft berhasil dibuat${failures.length?`; ${failures.length} gagal diunggah`:''}. Periksa & Edit sebelum submit.`,!!failures.length);
       if(failures.length)console.warn('Upload gagal:',failures);
     }catch(err){
@@ -417,6 +418,7 @@ async function uploadPage(){
     }
   });
 
+  $('#draft-reload').onclick=async()=>{if(!await reloadDraftBatch())toast('Daftar belum dapat dimuat. Coba lagi.',true)};
   $('#draft-batch-grid').addEventListener('change',updateDraftControls);
   $('#draft-select-ready').onclick=()=>{const boxes=[...$('#draft-batch-grid').querySelectorAll('.select-draft:not(:disabled)')];const select=boxes.some(x=>!x.checked);boxes.forEach(x=>x.checked=select);updateDraftControls()};
   updateDraftControls();
@@ -429,7 +431,7 @@ async function uploadPage(){
       if(ids.length>100)throw Error('Pilih maksimal 100 draft per pengajuan.');
       const closed=ids.some(id=>{const t=state.transactions.find(t=>t.id===id);return state.config.activities.find(a=>a.id===t.activity_id)?.closure_status==='CLOSED'});
       const late_reason=closed?prompt('Aktivitas telah ditutup. Isi alasan keterlambatan (wajib):'):null;
-      if(closed&&!late_reason)return;
+      if(closed&&!late_reason?.trim())return;
       if(!confirm('Ajukan '+ids.length+' draft terpilih? Pengeluaran hanya masuk laporan setelah APPROVED.'))return;
       draftSubmitting=true;updateDraftControls();
       const result=await post('/transactions/submit-batch',{ids,late_reason});
@@ -697,9 +699,12 @@ async function reviewAction(spec){
     t=rows.find(x=>x.id===txid);
   }
   const allowed=kind!=='reinstatement'||assignedReview(r);
+  const replacementExpected=kind==='correction'&&!!r.replacement_version_id;
+  const replacementAvailable=replacementExpected&&t&&Number.isInteger(r.replacement_version_number)&&r.replacement_version_number>0;
+  const replacementLink=replacementAvailable?`<p><a href="/api/receipts/${h(t.document_id)}?version=${r.replacement_version_number}" target="_blank" rel="noopener">Buka kuitansi pengganti (versi ${r.replacement_version_number}) ↗</a></p>`:replacementExpected?'<p class="notice">Versi kuitansi pengganti belum tersedia. Muat ulang Review Queue sebelum mengambil keputusan.</p>':'';
   const context=t?`<table class="small-table"><tr><td>Status saat ini</td><td>${pill(t.status)}</td></tr><tr><td>Keterangan</td><td>${h(t.description||'—')}</td></tr><tr><td>Tanggal</td><td>${h(t.transaction_date||'—')}</td></tr><tr><td>Nominal</td><td><b>${rp(t.amount_cents)}</b></td></tr><tr><td>Vendor</td><td>${h(t.vendor||'—')}</td></tr><tr><td>Uploader</td><td>${h(t.uploader_name||'—')}</td></tr></table><p><a href="/api/receipts/${h(t.document_id)}" target="_blank" rel="noopener">Buka kuitansi aktif ↗</a></p>`:'<p class="notice">Ringkasan transaksi tidak tersedia. Buka kembali antrean untuk memeriksa data.</p>';
-  const evidence=kind==='transaction'?`<h4>Alasan review</h4><ul>${reviewRisks(r.risk_reasons).map(x=>'<li>'+h(x)+'</li>').join('')||'<li>Perlu pemeriksaan admin.</li>'}</ul>`:kind==='correction'?`<h4>Usulan koreksi</h4><p>${h(r.reason)}</p>${reviewProposal(r.proposed_json)}${r.replacement_version_id?'<p class="notice">Ada versi kuitansi pengganti. Kuitansi aktif bukan versi usulan.</p>':''}<p class="tiny muted">Data resmi berubah hanya setelah keputusan disetujui.</p>`:`<h4>Permintaan pemulihan</h4><p>${h(r.reason)}</p><p class="tiny">SLA: ${h(r.sla_status)} · ${h(r.assignment_stage)}</p>`;
-  const canDecide=allowed&&!!t;
+  const evidence=kind==='transaction'?`<h4>Alasan review</h4><ul>${reviewRisks(r.risk_reasons).map(x=>'<li>'+h(x)+'</li>').join('')||'<li>Perlu pemeriksaan admin.</li>'}</ul>`:kind==='correction'?`<h4>Usulan koreksi</h4><p>${h(r.reason)}</p>${reviewProposal(r.proposed_json)}${replacementLink}<p class="tiny muted">Data resmi berubah hanya setelah keputusan disetujui.</p>`:`<h4>Permintaan pemulihan</h4><p>${h(r.reason)}</p><p class="tiny">SLA: ${h(r.sla_status)} · ${h(r.assignment_stage)}</p>`;
+  const canDecide=allowed&&!!t&&(!replacementExpected||replacementAvailable);
   modal('Periksa & Putuskan',`${context}${evidence}${canDecide?`<form id="review-decision-form" class="mt">
     <div class="field"><label>Keputusan*</label><select name="decision" required><option value="">Pilih keputusan...</option><option value="APPROVE" ${initial==='APPROVE'?'selected':''}>Approve</option><option value="REJECT" ${initial==='REJECT'?'selected':''}>Reject</option></select></div>
     <div class="field mt"><label>Alasan keputusan*</label><textarea name="reason" required placeholder="Tuliskan alasan berdasarkan pemeriksaan bukti"></textarea></div>
