@@ -42,12 +42,11 @@ async function nav(page){
 }
 async function loadTx(){state.transactions=await json('/transactions');return state.transactions}
 async function dashboard(){
- setHead('Dashboard','Pemantauan arus kas dan pengeluaran operasional perusahaan');
+ setHead('Dashboard','Ringkasan keuangan dan status pencatatan bukti transaksi');
  const [d,rows]=await Promise.all([json('/dashboard'),loadTx()]);
  const isAdmin=state.me.role==='admin';
- const months=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
- const mExp=d.monthly_expense||Array(12).fill(0);
- const maxBar=Math.max(1,...mExp);
+ const drafts=rows.filter(t=>t.status==='DRAFT').length;
+ const pending=d.pending_review||0;
  const shortRp=cents=>{
    const val=(cents||0)/100;
    if(val>=1e9)return 'Rp'+(val/1e9).toFixed(1)+'M';
@@ -71,30 +70,25 @@ async function dashboard(){
  });
 
  $('#page-content').innerHTML=`
- <div class="hero">
-   <div>
-     <div class="kicker">EXPENSE MANAGEMENT PLATFORM</div>
-     <h2>Pengeluaran tertata,<br><em>keputusan lebih cepat.</em></h2>
-     <p>Setiap kuitansi terlacak otomatis, pengeluaran diverifikasi, dan arus kas terpantau dalam satu dashboard.</p>
-     <div class="inline-actions mt">
-       <button class="btn primary" data-nav="upload">⬆ Upload Bukti Transaksi</button>
-       ${isAdmin?'<button class="btn outline" style="background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.35)" data-nav="reviews">Buka Review Queue →</button>':''}
-     </div>
+ <div class="dash-toolbar">
+   <div><h2>Ringkasan keuangan</h2><p>Seluruh periode tercatat · pengeluaran disetujui saja</p></div>
+   <div class="dash-toolbar-actions">
+     <button class="btn primary" data-nav="upload">+ Upload Bukti</button>
+     <button class="btn outline" data-nav="reports">Laporan Excel</button>
    </div>
-   <div class="circle-graphic">◎</div>
  </div>
 
  <div class="dash-kpi-grid">
    <div class="dash-card">
      <div class="dash-card-head">
-       <span class="dash-card-title">Total Pemasukan</span>
+       <span class="dash-card-title">Total Dana Masuk</span>
        <span class="dash-icon-box dash-icon-in">↓</span>
      </div>
      <div class="dash-val">${fmtRp(d.income_cents||0)}</div>
      <div class="dash-meta">
        <span class="tag-pill tag-in">↗ Dana masuk</span>
-       <span>Anggaran / Kas</span>
-       <button class="edit-income-btn" id="btn-set-income">Atur</button>
+       <span>Nilai global manual</span>
+       ${isAdmin?'<button class="edit-income-btn" id="btn-set-income">Atur</button>':''}
      </div>
    </div>
 
@@ -112,44 +106,22 @@ async function dashboard(){
 
    <div class="dash-card">
      <div class="dash-card-head">
-       <span class="dash-card-title">Saldo Bersih</span>
+       <span class="dash-card-title">Selisih Tercatat</span>
        <span class="dash-icon-box dash-icon-net">▣</span>
      </div>
      <div class="dash-val">${fmtRp(d.net_cents||0)}</div>
      <div class="dash-meta">
-       <span class="tag-pill tag-net">◎ Saldo tercatat</span>
-       <span>Dataset 2026</span>
+       <span> Dana masuk − pengeluaran</span><span> Bukan saldo bank</span>
      </div>
    </div>
  </div>
 
  <div class="analytics-grid">
-   <section class="dash-card">
-     <div class="chart-header">
-       <div>
-         <h3>Arus Kas Bulanan</h3>
-         <small>Perbandingan pemasukan &amp; pengeluaran</small>
-       </div>
-       <div class="chart-legend">
-         <span><i class="dot-sq" style="background:#14b8a6"></i>Pemasukan</span>
-         <span><i class="dot-sq" style="background:#fda4af"></i>Pengeluaran</span>
-       </div>
-     </div>
-     <div class="bar-chart-wrap">
-       <div class="bar-grid-lines"><span></span><span></span><span></span><span></span></div>
-       <div class="bars-row">
-         ${months.map((m,i)=>{
-           const outH=mExp[i]>0?Math.max(12,Math.round((mExp[i]/maxBar)*145)):3;
-           return `<div class="month-col">
-             <div class="bar-pair">
-               <div class="bar-in" style="height:3px" title="Pemasukan ${m}: Rp0"></div>
-               <div class="bar-out" style="height:${outH}px" title="Pengeluaran ${m}: ${fmtRp(mExp[i])}"></div>
-             </div>
-             <span class="month-lbl">${m}</span>
-           </div>`;
-         }).join('')}
-       </div>
-     </div>
+   <section class="dash-card dash-work-panel">
+     <div class="chart-header"><div><h3>Perlu perhatian</h3><small>Selesaikan pencatatan sebelum masuk laporan</small></div></div>
+     <div class="dash-work-row"><div><strong>Draft kuitansi</strong><small>Belum diajukan untuk pemeriksaan</small></div><b>${drafts}</b><button class="btn outline" data-nav="upload">Periksa</button></div>
+     ${isAdmin?`<div class="dash-work-row"><div><strong>Menunggu review</strong><small>Belum masuk total pengeluaran</small></div><b>${pending}</b><button class="btn outline" data-nav="reviews">Review</button></div>`:`<div class="dash-work-row"><div><strong>Menunggu review</strong><small>Belum masuk total pengeluaran</small></div><b>${pending}</b></div>`}
+     <p class="dash-period-note">Grafik bulanan akan tersedia setelah pencatatan pemasukan dan filter tahun divalidasi. Ringkasan di atas belum difilter berdasarkan tahun.</p>
    </section>
 
    <section class="dash-card">
@@ -158,7 +130,7 @@ async function dashboard(){
          <h3>Pengeluaran Terbesar</h3>
          <small>Distribusi berdasarkan kategori</small>
        </div>
-       <span class="year-badge">Tahun ini</span>
+       <span class="year-badge">Semua periode</span>
      </div>
      <div class="donut-box">
        <div class="donut-svg-wrap">
@@ -191,7 +163,7 @@ async function dashboard(){
      <button class="btn outline" style="border:none;color:#10b981;font-weight:700" data-nav="transactions">Lihat semua →</button>
    </div>
    ${rows.length?`<div class="tablescroll"><table class="data-table">
-     <thead><tr><th>TANGGAL</th><th>KETERANGAN</th><th>TRANSFER KE</th><th>TRANSFER DARI</th><th>JENIS</th><th>NOMINAL</th><th>STATUS</th></tr></thead>
+     <thead><tr><th>TANGGAL</th><th>KETERANGAN</th><th>VENDOR</th><th>JENIS</th><th>NOMINAL</th><th>STATUS</th></tr></thead>
      <tbody>${rows.slice(0,5).map(t=>`<tr>
        <td class="nowrap">${h(t.transaction_date||'—')}</td>
        <td>
@@ -199,7 +171,6 @@ async function dashboard(){
          <div class="tiny muted">${h(t.description||'')}</div>
        </td>
        <td>${h(t.vendor||'—')}</td>
-       <td>PT Mulia Hakimaco Sejahtera</td>
        <td><span class="tag-pill tag-out">↗ Pengeluaran</span></td>
        <td class="nowrap"><strong>${fmtRp(t.amount_cents||0)}</strong></td>
        <td>${pill(t.status)}</td>
