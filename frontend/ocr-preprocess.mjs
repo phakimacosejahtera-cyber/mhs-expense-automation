@@ -40,6 +40,12 @@ export function enhancePixels(pixels,width,height,variant='contrast'){
   for(let i=0;i<n;i++){
     const x=i%width,y=Math.floor(i/width), v=gray[i];
     let sharpen=v;
+    if(variant==='denoise'&&x>0&&x<width-1&&y>0&&y<height-1){
+      const near=[gray[i-1],gray[i+1],gray[i-width],gray[i+width]];
+      const avg=near.reduce((a,b)=>a+b,0)/4;
+      // Suppress isolated speckles only where all four neighbors agree.
+      if(Math.max(...near)-Math.min(...near)<18&&Math.abs(v-avg)>65)sharpen=avg;
+    }
     if(variant==='sharp'&&x>0&&x<width-1&&y>0&&y<height-1){
       const avg=(gray[i-1]+gray[i+1]+gray[i-width]+gray[i+width])/4;
       sharpen=clamp(v+.65*(v-avg));
