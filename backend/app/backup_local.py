@@ -20,7 +20,7 @@ MANIFEST = "manifest.json"
 MAX_TOTAL = 4 * 1024**3
 MAX_MEMBERS = 100000
 MAX_MANIFEST = 16 * 1024**2
-FILE_NAME = re.compile(r"(private_docs|exports)/[A-Za-z0-9][A-Za-z0-9_.-]{0,239}")
+FILE_NAME = re.compile(r"(?:private_docs/[0-9a-f-]{36}\.(?:pdf|png|jpg|jpeg|webp)|exports/[0-9a-f-]{36}\.xlsx)")
 DAILY_NAME = re.compile(r"mhs-daily-\d{4}-\d{2}-\d{2}\.zip")
 LOCK = threading.Lock()
 LOG = logging.getLogger("uvicorn.error")
@@ -71,6 +71,8 @@ def references(c):
 def local_reference(root, raw, folder):
     source = Path(raw).resolve()
     parent = (root / folder).resolve()
+    if parent.parent != root or parent.name != folder:
+        raise BackupError("Invalid local storage folder")
     name = folder + "/" + source.name
     if source.parent != parent or not source.is_file() or not safe_member(name):
         raise BackupError("Referenced document or export missing/outside local storage")
@@ -154,6 +156,8 @@ def unpack_verified(archive, stage):
         if manifest_info.file_size > MAX_MANIFEST:
             raise BackupError("Backup manifest too large")
         manifest = json.loads(z.read(MANIFEST))
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("created_at"), str):
+            raise BackupError("Invalid manifest")
         files = manifest.get("files")
         if manifest.get("format") != "MHS_LOCAL_BACKUP_V1" or not isinstance(files, dict) or DB_NAME not in files:
             raise BackupError("Unsupported backup format")
@@ -163,7 +167,8 @@ def unpack_verified(archive, stage):
             raise BackupError("Backup exceeds local size limit")
         for name, expected in files.items():
             info = z.getinfo(name)
-            if not isinstance(expected, dict) or info.file_size != expected.get("size") or info.is_dir():
+            if (not isinstance(expected, dict) or info.file_size != expected.get("size") or info.is_dir()
+                    or not isinstance(expected.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", expected["sha256"])):
                 raise BackupError("Backup file size mismatch")
             out = stage / name
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -234,15 +239,23 @@ def daily_once(data_dir):
     if not destination.exists():
         create_backup(data_dir, destination)
     for old in daily_archives(data_dir)[7:]:
-        old.unlink()
+        try:
+            old.unlink()
+        except OSError:
+            LOG.warning("MHS old backup could not be removed")
     return destination
+
+
+DAILY_STATUS = {"state": "waiting", "last_checked": None}
 
 
 def daily_loop(data_dir, stop):
     while not stop.is_set():
         try:
             daily_once(data_dir)
+            DAILY_STATUS.update(state="ok", last_checked=datetime.now(ZoneInfo("Asia/Jakarta")).isoformat())
         except Exception as exc:
+            DAILY_STATUS.update(state="failed", last_checked=datetime.now(ZoneInfo("Asia/Jakarta")).isoformat())
             LOG.warning("MHS daily backup failed: %s", type(exc).__name__)
         stop.wait(3600)
 
