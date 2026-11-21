@@ -74,3 +74,13 @@
 .dash-toolbar .btn:focus-visible,.dash-work-row .btn:focus-visible,.edit-income-btn:focus-visible{outline:2px solid var(--orange-dark);outline-offset:2px}
 @media(max-width:1050px){.analytics-grid{grid-template-columns:1fr}}
 @media(max-width:620px){.dash-kpi-grid{grid-template-columns:1fr}.dash-toolbar{padding:14px}.dash-toolbar-actions{width:100%}.dash-toolbar-actions .btn{flex:1}.dash-kpi-grid .dash-card{padding:14px}.dash-val{font-size:24px}}
+
+/* Finance preview period controls */
+.finance-filter{display:flex;align-items:center;gap:5px;font-size:11px;color:#475569;font-weight:600}
+.finance-filter input,.finance-filter select{border:1px solid #ddd;background:white;border-radius:8px;padding:7px;color:#222;font:inherit;max-width:90px}
+.dash-kpi-grid .dash-val{font-size:clamp(22px,2.5vw,32px)}
+.bar-pair .bar-in,.bar-pair .bar-out{width:clamp(3px,1.1vw,14px);flex-shrink:1}
+.bars-row{gap:2px;padding:0}
+.bar-pair{gap:2px}
+.month-lbl{font-size:10px}
+.chart-legend{flex-wrap:wrap}
