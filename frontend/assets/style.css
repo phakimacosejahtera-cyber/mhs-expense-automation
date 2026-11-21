@@ -47,3 +47,30 @@
 @media(max-width:960px){
   .dash-kpi-grid,.analytics-grid{grid-template-columns:1fr}
 }
+
+/* Phase 3 dashboard shell: compact, responsive, no change to finance calculations. */
+.dash-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:#fff;border:1px solid var(--border);border-radius:14px;padding:17px 20px}
+.dash-toolbar h2{font-size:17px;margin:0;color:#242424}
+.dash-toolbar p{margin:4px 0 0;color:#64748b;font-size:12px}
+.dash-toolbar-actions{display:flex;gap:8px;flex-wrap:wrap}
+.dash-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
+.dash-kpi-grid .dash-card{padding:16px;min-width:0;border-radius:14px}
+.dash-card-head{gap:8px;margin-bottom:9px}
+.dash-card-title{font-size:12px}
+.dash-icon-box{flex:none;width:30px;height:30px}
+.dash-val{font-size:clamp(18px,2vw,28px);overflow-wrap:anywhere;margin-bottom:8px}
+.dash-meta{flex-wrap:wrap;gap:5px;font-size:11px;color:#64748b}
+.dash-meta .tag-pill{font-size:10px;padding:3px 6px}
+.analytics-grid{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:12px;margin-top:14px}
+.analytics-grid .dash-card{min-width:0;padding:18px}
+.chart-header{gap:8px;flex-wrap:wrap}
+.chart-header small{color:#64748b}
+.dash-work-row{display:flex;align-items:center;gap:10px;border-bottom:1px solid #eee;padding:14px 0;flex-wrap:wrap}
+.dash-work-row>div{flex:1;min-width:110px}
+.dash-work-row strong,.dash-work-row small{display:block}
+.dash-work-row small{color:#64748b;font-size:11px}
+.dash-work-row>b{font-size:22px;color:#242424}
+.dash-period-note{font-size:12px;color:#64748b;margin:15px 0 0;background:#f7f7f6;border-radius:8px;padding:10px}
+.dash-toolbar .btn:focus-visible,.dash-work-row .btn:focus-visible,.edit-income-btn:focus-visible{outline:2px solid var(--orange-dark);outline-offset:2px}
+@media(max-width:1050px){.analytics-grid{grid-template-columns:1fr}}
+@media(max-width:620px){.dash-kpi-grid{grid-template-columns:1fr}.dash-toolbar{padding:14px}.dash-toolbar-actions{width:100%}.dash-toolbar-actions .btn{flex:1}.dash-kpi-grid .dash-card{padding:14px}.dash-val{font-size:24px}}
