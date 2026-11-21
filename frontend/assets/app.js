@@ -246,6 +246,16 @@ async function recognizeReceipt(engine,file,id,progress,deep=false){
   return engine.recognize(file,progress,{deep});
 }
 
+async function saveHybridOCR(id,result,progress){
+  let run=null;
+  if(result)run=await post('/transactions/'+id+'/ocr-result',{text:result.text.slice(0,16000),confidence:result.confidence,suggestions:result.suggestions});
+  progress('Memeriksa dengan PaddleOCR lokal',null);
+  const paddle=await post('/transactions/'+id+'/paddle-ocr',{browser_run_id:run?.run_id||null});
+  if(paddle.status!=='EXTRACTED'&&!run)throw Error(paddle.message||'OCR tidak tersedia');
+  const enriched=await json('/transactions/'+id+'/ocr-result');
+  return {...enriched,paddle_status:paddle.status};
+}
+
 async function uploadPage(){
   setHead('Upload Receipt','Upload batch, baca kuitansi dengan Tesseract.js, periksa data, lalu submit sebagian');
   await loadTx();
@@ -318,28 +328,22 @@ async function uploadPage(){
         try{ocr=await loadBrowserOCR()}
         catch(err){for(const item of images)state.ocrStatus.set(item.id,`Belum diproses: ${err.message}`)}
       }
-      if(ocr){
+      if(images.length){
         try{
           let count=0;
           for(const {file,id} of images){
             count++;
+            const report=(status,pct)=>progress(`OCR ${count}/${images.length} — ${file.name}: ${status}${pct===null?'':' '+pct+'%'}`);
             try{
-              const result=await recognizeReceipt(ocr,file,id,(status,pct)=>progress(`OCR ${count}/${images.length} — ${file.name}: ${status}${pct===null?'':' '+pct+'%'}`));
-              state.ocrResults.set(id,result);
-              state.ocrStatus.set(id,'Teks terbaca; belum diverifikasi — buka Periksa & Edit');
-              try{
-                await post('/transactions/'+id+'/ocr-result',{
-                  text:result.text.slice(0,16000),confidence:result.confidence,
-                  suggestions:result.suggestions
-                });
-              }catch(err){
-                state.ocrStatus.set(id,'Teks terbaca; penyimpanan histori OCR belum berhasil — tetap bisa periksa manual');
-                console.warn('Penyimpanan OCR gagal:',err.message);
-              }
+              let result=null;
+              if(ocr)try{result=await recognizeReceipt(ocr,file,id,report)}catch(err){console.warn('Tesseract gagal:',err.message)}
+              const enriched=await saveHybridOCR(id,result,report);
+              state.ocrResults.set(id,enriched);
+              state.ocrStatus.set(id,enriched.paddle_status==='EXTRACTED'?'PaddleOCR selesai; belum diverifikasi':'Tesseract saja — PaddleOCR '+enriched.paddle_status);
             }catch(err){state.ocrStatus.set(id,`OCR gagal: ${err.message}. Isi manual.`)}
           }
         }finally{
-          try{await ocr.close()}catch(err){console.warn('Menutup OCR worker:',err)}
+          if(ocr)try{await ocr.close()}catch(err){console.warn('Menutup OCR worker:',err)}
         }
       }
       for(const {file,id} of successes.filter(x=>!isImageOCRFile(x.file)))
@@ -392,6 +396,7 @@ function renderOCREvidence(result){
   const cats=categoryRules.filter(([rx])=>rx.test(descriptions)).map(([,name])=>state.config.categories.find(c=>c.name===name)).filter(Boolean);
   return `<p class="tiny">Cocokkan setiap saran dengan dokumen asli. Bruto, neto, dan potongan pajak bukan nilai yang dapat dipertukarkan.</p>
    ${warnings.length?`<div class="ocr-context"><b>Periksa nominal</b>${warnings.map(x=>`<p>${h(x)}</p>`).join('')}</div>`:''}
+   ${result.engine_scores?`<p class="tiny">Skor mesin (bukan akurasi): ${Object.entries(result.engine_scores).map(([name,score])=>h(name)+': '+(Number.isFinite(score)?Math.round(score)+'%':'tidak tersedia')).join(' · ')}</p>`:''}
    <b class="tiny">Kandidat nominal</b>${moneyRows||'<p class="tiny muted">Tidak terdeteksi. Isi manual.</p>'}
    <b class="tiny">Kandidat tanggal</b><div class="row wrap" style="gap:6px">${dateRows||'<span class="tiny muted">Tidak terdeteksi. Isi manual.</span>'}</div>
    ${context.length?`<div class="ocr-context"><b>Tanggal referensi surat mungkin bukan tanggal pembayaran.</b>${context.map(x=>`<p>${h(x)}</p>`).join('')}</div>`:''}
@@ -448,14 +453,15 @@ async function editDraft(id){
       const type=blob.type.split(';')[0].toLowerCase();
       if(!['image/png','image/jpeg','image/webp','application/pdf'].includes(type))throw new Error('Format dokumen tidak didukung.');
       if(blob.size>8*1024*1024||!blob.size)throw new Error('Ukuran dokumen tidak didukung.');
-      engine=await loadBrowserOCR();
+      try{engine=await loadBrowserOCR()}catch(err){console.warn('Tesseract tidak tersedia:',err.message)}
       const file=new File([blob],'receipt.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp','application/pdf':'pdf'}[type]),{type});
-      const result=await recognizeReceipt(engine,file,id,(msg,pct)=>{status.textContent=msg+(pct===null?'':' '+pct+'%')},true);
-      await post('/transactions/'+id+'/ocr-result',{text:result.text.slice(0,16000),confidence:result.confidence,suggestions:result.suggestions});
-      const enriched=await json('/transactions/'+id+'/ocr-result');
+      const report=(msg,pct)=>{status.textContent=msg+(pct===null?'':' '+pct+'%')};
+      let result=null;
+      if(engine)try{result=await recognizeReceipt(engine,file,id,report,true)}catch(err){console.warn('Tesseract gagal:',err.message)}
+      const enriched=await saveHybridOCR(id,result,report);
       state.ocrResults.set(id,enriched);
       state.ocrStatus.set(id,'OCR dibaca ulang; belum diverifikasi');
-      if(draftForm.isConnected){draftForm.querySelector('#ocr-evidence').innerHTML=renderOCREvidence(enriched);status.textContent='Selesai. Isian formulir tetap dipertahankan.'}
+      if(draftForm.isConnected){draftForm.querySelector('#ocr-evidence').innerHTML=renderOCREvidence(enriched);status.textContent=(enriched.paddle_status==='EXTRACTED'?'PaddleOCR selesai. ':'PaddleOCR '+enriched.paddle_status+'. ')+'Isian formulir tetap dipertahankan.'}
     }catch(err){status.textContent=err.message;toast(err.message,true)}
     finally{if(engine)try{await engine.close()}catch{}ocrBusy=false;btn.disabled=false}
   };
