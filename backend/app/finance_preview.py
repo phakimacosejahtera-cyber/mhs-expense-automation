@@ -21,6 +21,7 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS income_entries(
 def initialize():
     with tx() as c:
         c.execute(SCHEMA)
+        c.execute("CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_income_date ON income_entries(transaction_date)")
 
 def owner(request, write=False):
