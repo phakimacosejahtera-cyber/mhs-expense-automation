@@ -391,6 +391,44 @@ def save_browser_ocr(request:Request,txid:str,data:BrowserOCRObservation):
               {'run_id':run_id,'provider':'TESSERACT_JS_CLIENT','verified':False})
     return {'ok':True,'status':'EXTRACTED','verified':False,'run_id':run_id}
 
+class PaddleRunIn(BaseModel):
+    browser_run_id: str | None = Field(default=None,max_length=64)
+
+@app.post('/api/transactions/{txid}/paddle-ocr')
+def run_paddle_ocr(request:Request,txid:str,data:PaddleRunIn):
+    u=auth(request,True)
+    from . import paddle_local
+    if APP_MODE!='demo' or not paddle_local.enabled():
+        return {'status':'UNAVAILABLE','message':'PaddleOCR lokal belum aktif'}
+    with connection() as c:
+        t=one(c,'SELECT * FROM transactions WHERE id=? AND deleted_at IS NULL',(txid,))
+        if not t:raise HTTPException(404,'Draft tidak ditemukan')
+        own_or_admin(u,t['uploader_id'])
+        if t['status']!='DRAFT':raise HTTPException(409,'Hanya draft aktif')
+        v=one(c,'SELECT v.* FROM documents d JOIN document_versions v ON v.id=d.active_version_id WHERE d.id=?',(t['document_id'],))
+        if data.browser_run_id and not one(c,"SELECT id FROM extraction_runs WHERE id=? AND document_id=? AND provider='TESSERACT_JS_CLIENT'",(data.browser_run_id,t['document_id'])):
+            raise HTTPException(422,'Hasil OCR pembanding tidak ditemukan')
+    if not v:raise HTTPException(404,'Dokumen tidak ditemukan')
+    try:
+        path=legacy_local_path(v['storage_path'],DATA)
+        if path.stat().st_size>8*1024*1024:raise ValueError()
+        raw=path.read_bytes()
+        if len(raw)!=v['file_size'] or hashlib.sha256(raw).hexdigest()!=v['sha256']:raise ValueError()
+        result=paddle_local.recognize(raw,v['media_type'])
+        if not result:raise ValueError()
+    except Exception:
+        return {'status':'FAILED','message':'PaddleOCR gagal atau sibuk; periksa hasil Tesseract atau isi manual'}
+    with tx() as c:
+        current=one(c,'SELECT t.status,t.deleted_at,d.active_version_id FROM transactions t JOIN documents d ON d.id=t.document_id WHERE t.id=?',(txid,))
+        if not current or current['deleted_at'] or current['status']!='DRAFT' or current['active_version_id']!=v['id']:
+            raise HTTPException(409,'Draft atau versi dokumen berubah')
+        run_id=uid()
+        payload={**result,'browser_run_id':data.browser_run_id,'document_version_id':v['id']}
+        c.execute('INSERT INTO extraction_runs(id,document_id,status,provider,raw_json,created_at) VALUES (?,?,?,?,?,?)',
+                  (run_id,t['document_id'],'EXTRACTED','PADDLE_LOCAL',js(payload),now()))
+        audit(c,u['id'],'OCR_PADDLE_RECORDED','document',t['document_id'],{'run_id':run_id,'verified':False,'browser_run_id':data.browser_run_id})
+    return {'status':'EXTRACTED','verified':False,'run_id':run_id}
+
 @app.get('/api/transactions/{txid}/ocr-result')
 def read_browser_ocr(request:Request,txid:str):
     u=auth(request)
@@ -398,10 +436,25 @@ def read_browser_ocr(request:Request,txid:str):
         t=one(c,'SELECT uploader_id,document_id FROM transactions WHERE id=? AND deleted_at IS NULL',(txid,))
         if not t:raise HTTPException(404,'Transaksi tidak ditemukan')
         own_or_admin(u,t['uploader_id'])
-        row=one(c,"SELECT raw_json FROM extraction_runs WHERE document_id=? AND provider='TESSERACT_JS_CLIENT' ORDER BY created_at DESC, rowid DESC LIMIT 1",(t['document_id'],))
-        if not row:raise HTTPException(404,'Belum ada hasil OCR Tesseract.js')
         from .ocr_candidates import enrich_observation
-        return enrich_observation(json.loads(row['raw_json']))
+        if APP_MODE!='demo':
+            row=one(c,"SELECT raw_json FROM extraction_runs WHERE document_id=? AND provider='TESSERACT_JS_CLIENT' ORDER BY created_at DESC, rowid DESC LIMIT 1",(t['document_id'],))
+            if not row:raise HTTPException(404,'Belum ada hasil OCR')
+            return enrich_observation(json.loads(row['raw_json']))
+        runs=allrows(c,"SELECT id,provider,raw_json FROM extraction_runs WHERE document_id=? AND provider IN ('TESSERACT_JS_CLIENT','PADDLE_LOCAL') ORDER BY created_at DESC,rowid DESC LIMIT 1",(t['document_id'],))
+        if not runs:raise HTTPException(404,'Belum ada hasil OCR')
+        latest=runs[0]; payload=json.loads(latest['raw_json'])
+        if latest['provider']=='TESSERACT_JS_CLIENT':
+            return enrich_observation(payload)
+        version=one(c,'SELECT active_version_id FROM documents WHERE id=?',(t['document_id'],))
+        if payload.get('document_version_id')!=version['active_version_id']:
+            raise HTTPException(404,'Hasil OCR tidak sesuai versi aktif')
+        browser=None
+        if payload.get('browser_run_id'):
+            row=one(c,"SELECT raw_json FROM extraction_runs WHERE id=? AND document_id=? AND provider='TESSERACT_JS_CLIENT'",(payload['browser_run_id'],t['document_id']))
+            if row:browser=json.loads(row['raw_json'])
+        from .ocr_candidates import combine_observations
+        return combine_observations(browser,payload)
 
 class DraftData(BaseModel):
     transaction_date:str|None=None;amount:str|int|float|None=None;description:str|None=None
