@@ -544,14 +544,103 @@ async function correctionForm(id){let t=state.transactions.find(x=>x.id===id);if
 async function actionReverse(id){let reason=prompt('Alasan pembatalan approval (wajib, minimal 5 karakter):');if(!reason)return;if(!confirm('Yakin reverse transaksi ini? Transaksi tidak lagi masuk laporan terbaru.'))return;try{await post('/admin/transactions/'+id+'/reverse',{reason});toast('Transaksi dibatalkan dengan audit trail');await nav('transactions')}catch(e){toast(e.message,true)}}
 async function actionReinstate(id){let reason=prompt('Alasan reinstatement (minimal 5 karakter):');if(!reason)return;try{let r=await post('/transactions/'+id+'/reinstatement',{reason});toast(`Reinstatement pending. SLA: ${r.sla_status}`);await nav('transactions')}catch(e){toast(e.message,true)}}
 async function actionDelete(id){if(!confirm('Soft-delete draft? Admin dapat memulihkannya dalam 30 hari.'))return;try{await json('/transactions/'+id+'/draft',{method:'DELETE'});toast('Draft soft-deleted');await nav('upload')}catch(e){toast(e.message,true)}}
-async function reviewsPage(){setHead('Review Queue','Keputusan admin satu per satu, dengan alasan dan histori');state.queue=await json('/admin/review-queue');let q=state.queue;
- const row=(title,sub,type,id,extra='',provisional=false)=>`<div class="review-card"><div><strong>${h(title)}</strong><small>${h(sub)}</small>${extra}</div><div class="inline-actions"><button class="btn primary" data-review="${type}:${id}:APPROVE">Approve</button><button class="btn danger" data-review="${type}:${id}:REJECT">Reject</button>${type==='reinstatement'?`<button class="btn outline" data-escalate="${id}">Eskalasi</button>${provisional?`<button class="btn soft" data-snooze="${id}">Snooze</button>`:''}`:''}</div></div>`;
- $('#page-content').innerHTML=`<div class="kpis"><div class="kpi"><small>Pending Transaction</small><strong>${q.transactions.length}</strong></div><div class="kpi"><small>Correction Requests</small><strong>${q.corrections.length}</strong></div><div class="kpi orange"><small>Reinstatement</small><strong>${q.reinstatements.length}</strong></div></div>
- <section class="panel mt"><div class="panelhead"><div><h3>Transaksi berisiko</h3><small>Manual approval only</small></div></div>${q.transactions.map(t=>row(t.description||'Tanpa keterangan',(JSON.parse(t.risk_reasons||'[]')).join(' • ')||'Perlu review','transaction',t.id,`<small>Nominal: ${rp(t.amount_cents)} | Uploader: ${h(t.uploader_name)}</small><a target="_blank" href="/api/receipts/${t.document_id}">Lihat kuitansi ↗</a>`)).join('')||'<div class="empty">Tidak ada transaksi yang perlu review.</div>'}</section>
- <section class="panel mt"><div class="panelhead"><h3>Permintaan Koreksi</h3></div>${q.corrections.map(r=>row(r.description||'Transaksi',r.reason+' · Usulan: '+r.proposed_json,'correction',r.id)).join('')||'<div class="empty">Tidak ada koreksi pending.</div>'}</section>
- <section class="panel mt"><div class="panelhead"><h3>Permintaan Reinstatement</h3></div>${q.reinstatements.map(r=>row(r.description||'Transaksi',`Status SLA: ${r.sla_status}; penugasan: ${r.assignment_stage}; due: ${r.due_at||r.provisional_due_at||'—'}`,'reinstatement',r.id,`<small>Pemohon: ${h(r.requester_id)} | ${h(r.reason)}</small>`,r.sla_status==='PROVISIONAL'&&!r.snoozed_at)).join('')||'<div class="empty">Tidak ada reinstatement pending.</div>'}</section>`;
+// Phase 3.5: contextual review; existing backend is the authority.
+let reviewSubmitting=false;
+function reviewRisks(raw){
+  try{const v=JSON.parse(raw||'[]');return Array.isArray(v)?v.map(String):[]}catch{return ['Alasan risiko tidak dapat ditampilkan; periksa detail transaksi.']}
 }
-async function reviewAction(spec){let [kind,id,decision]=spec.split(':');let reason=prompt(`Alasan ${decision==='APPROVE'?'persetujuan':'penolakan'} (wajib untuk tindakan berisiko):`);if(!reason)return;let route=kind==='transaction'?'/admin/transactions/'+id+'/decision':kind==='correction'?'/admin/corrections/'+id+'/decision':'/admin/reinstatements/'+id+'/decision';if(!confirm('Konfirmasi keputusan '+decision+'?'))return;try{await post(route,{decision,reason});toast('Keputusan disimpan dengan audit');await nav('reviews')}catch(e){toast(e.message,true)}}
+function reviewProposal(raw){
+  try{
+    const p=JSON.parse(raw||'{}');
+    if(!p||typeof p!=='object'||Array.isArray(p))throw Error();
+    const labels={transaction_date:'Tanggal',amount_cents:'Nominal',description:'Keterangan',category_id:'Kategori',activity_id:'Aktivitas',vendor:'Vendor',payment_method:'Metode pembayaran',invoice_number:'Nomor invoice',notes:'Catatan'};
+    return Object.entries(p).map(([k,v])=>{
+      let shown=v;
+      if(k==='amount_cents')shown=rp(v);
+      if(k==='category_id')shown=state.config.categories.find(c=>c.id===v)?.name||v;
+      if(k==='activity_id')shown=state.config.activities.find(c=>c.id===v)?.name||v;
+      return '<div class="tiny"><b>'+h(labels[k]||k)+':</b> '+h(shown??'—')+'</div>';
+    }).join('')||'<p class="tiny muted">Tidak ada perubahan kolom.</p>';
+  }catch{return '<p class="tiny muted">Usulan tidak dapat ditampilkan. Periksa detail sebelum mengambil keputusan.</p>'}
+}
+function reviewRecord(kind,id){
+  const rows=kind==='transaction'?state.queue?.transactions:kind==='correction'?state.queue?.corrections:kind==='reinstatement'?state.queue?.reinstatements:null;
+  return rows?.find(x=>x.id===id);
+}
+function assignedReview(r){return !!r.assigned_reviewer_id&&r.assigned_reviewer_id===state.me?.id}
+async function reviewsPage(){
+  setHead('Review Queue','Periksa bukti dan alasan sebelum mengambil keputusan');
+  const q=await json('/admin/review-queue');
+  if(state.page!=='reviews')return;
+  state.queue=q;
+  const row=(title,sub,type,r,extra='')=>{
+    const assigned=type!=='reinstatement'||assignedReview(r);
+    return `<div class="review-card"><div><strong>${h(title)}</strong><small>${h(sub)}</small>${extra}
+    ${!assigned?'<small class="muted">Keputusan hanya oleh admin yang ditugaskan.</small>':''}</div>
+    <div class="inline-actions">
+      <button class="btn outline" data-review-context="${h(type+':'+r.id)}">Periksa</button>
+      <button class="btn primary" data-review="${h(type+':'+r.id+':APPROVE')}" ${assigned?'':'disabled'}>Approve</button>
+      <button class="btn danger" data-review="${h(type+':'+r.id+':REJECT')}" ${assigned?'':'disabled'}>Reject</button>
+      ${type==='reinstatement'?`<button class="btn outline" data-escalate="${h(r.id)}">Eskalasi</button>${r.sla_status==='PROVISIONAL'&&!r.snoozed_at?`<button class="btn soft" data-snooze="${h(r.id)}">Snooze</button>`:''}`:''}
+    </div></div>`;
+  };
+  $('#page-content').innerHTML=`<div class="kpis">
+  <div class="kpi"><small>Pending Transaction</small><strong>${q.transactions.length}</strong></div>
+  <div class="kpi"><small>Correction Requests</small><strong>${q.corrections.length}</strong></div>
+  <div class="kpi orange"><small>Reinstatement</small><strong>${q.reinstatements.length}</strong></div></div>
+  <div class="notice mt">Pengeluaran baru masuk laporan setelah APPROVED. Keputusan tetap dicatat satu per satu; tidak ada approval massal otomatis.</div>
+  <section class="panel mt"><div class="panelhead"><div><h3>Transaksi menunggu review</h3><small>Manual approval</small></div></div>
+  ${q.transactions.map(t=>row(t.description||'Tanpa keterangan',reviewRisks(t.risk_reasons).join(' • ')||'Perlu review','transaction',t,`<small>Nominal: ${rp(t.amount_cents)} | Uploader: ${h(t.uploader_name)}</small><small>Tanggal: ${h(t.transaction_date||'—')}</small><a target="_blank" rel="noopener" href="/api/receipts/${h(t.document_id)}">Lihat kuitansi ↗</a>`)).join('')||'<div class="empty">Tidak ada transaksi yang perlu review.</div>'}</section>
+  <section class="panel mt"><div class="panelhead"><h3>Permintaan Koreksi</h3></div>
+  ${q.corrections.map(r=>row(r.description||'Transaksi',r.reason,'correction',r,reviewProposal(r.proposed_json))).join('')||'<div class="empty">Tidak ada koreksi pending.</div>'}</section>
+  <section class="panel mt"><div class="panelhead"><h3>Permintaan Reinstatement</h3></div>
+  ${q.reinstatements.map(r=>row(r.description||'Transaksi',`Status SLA: ${r.sla_status}; penugasan: ${r.assignment_stage}; due: ${r.due_at||r.provisional_due_at||'—'}`,'reinstatement',r,`<small>Alasan: ${h(r.reason)}</small>`)).join('')||'<div class="empty">Tidak ada reinstatement pending.</div>'}</section>`;
+}
+async function reviewAction(spec){
+  if(reviewSubmitting)return toast('Keputusan sedang diproses.',true);
+  const [kind,id,initial]=spec.split(':');
+  const r=reviewRecord(kind,id);
+  if(!r)return toast('Item tidak tersedia; buka ulang Review Queue.',true);
+  const txid=kind==='transaction'?id:r.transaction_id;
+  let t=kind==='transaction'?r:null;
+  if(!t){
+    const rows=await loadTx();
+    if(state.page!=='reviews')return;
+    t=rows.find(x=>x.id===txid);
+  }
+  const allowed=kind!=='reinstatement'||assignedReview(r);
+  const context=t?`<table class="small-table"><tr><td>Status saat ini</td><td>${pill(t.status)}</td></tr><tr><td>Keterangan</td><td>${h(t.description||'—')}</td></tr><tr><td>Tanggal</td><td>${h(t.transaction_date||'—')}</td></tr><tr><td>Nominal</td><td><b>${rp(t.amount_cents)}</b></td></tr><tr><td>Vendor</td><td>${h(t.vendor||'—')}</td></tr><tr><td>Uploader</td><td>${h(t.uploader_name||'—')}</td></tr></table><p><a href="/api/receipts/${h(t.document_id)}" target="_blank" rel="noopener">Buka kuitansi aktif ↗</a></p>`:'<p class="notice">Ringkasan transaksi tidak tersedia. Buka kembali antrean untuk memeriksa data.</p>';
+  const evidence=kind==='transaction'?`<h4>Alasan review</h4><ul>${reviewRisks(r.risk_reasons).map(x=>'<li>'+h(x)+'</li>').join('')||'<li>Perlu pemeriksaan admin.</li>'}</ul>`:kind==='correction'?`<h4>Usulan koreksi</h4><p>${h(r.reason)}</p>${reviewProposal(r.proposed_json)}${r.replacement_version_id?'<p class="notice">Ada versi kuitansi pengganti. Kuitansi aktif bukan versi usulan.</p>':''}<p class="tiny muted">Data resmi berubah hanya setelah keputusan disetujui.</p>`:`<h4>Permintaan pemulihan</h4><p>${h(r.reason)}</p><p class="tiny">SLA: ${h(r.sla_status)} · ${h(r.assignment_stage)}</p>`;
+  const canDecide=allowed&&!!t;
+  modal('Periksa & Putuskan',`${context}${evidence}${canDecide?`<form id="review-decision-form" class="mt">
+    <div class="field"><label>Keputusan*</label><select name="decision" required><option value="">Pilih keputusan...</option><option value="APPROVE" ${initial==='APPROVE'?'selected':''}>Approve</option><option value="REJECT" ${initial==='REJECT'?'selected':''}>Reject</option></select></div>
+    <div class="field mt"><label>Alasan keputusan*</label><textarea name="reason" required placeholder="Tuliskan alasan berdasarkan pemeriksaan bukti"></textarea></div>
+    <label class="checkrow mt"><input type="checkbox" name="confirmed" required> Saya telah memeriksa data dan bukti yang relevan.</label>
+    <p class="tiny muted">Keputusan akan dicatat pada audit trail.</p>
+    <button type="submit" class="btn primary mt">Simpan Keputusan</button>
+    <p id="review-decision-status" role="status" class="tiny muted mt"></p>
+  </form>`:'<p class="notice">Keputusan tidak tersedia dari tampilan ini.</p>'}`,'<button class="btn outline" id="modal-done">Tutup</button>');
+  $('#modal-done').onclick=closeModal;
+  const form=$('#review-decision-form');if(!form)return;
+  form.onsubmit=async e=>{
+    e.preventDefault();if(reviewSubmitting)return;
+    const f=new FormData(form),decision=String(f.get('decision')),reason=String(f.get('reason')||'').trim();
+    if(!reason||!['APPROVE','REJECT'].includes(decision)||!f.get('confirmed'))return toast('Lengkapi keputusan, alasan, dan konfirmasi pemeriksaan.',true);
+    const route=kind==='transaction'?'/admin/transactions/'+id+'/decision':kind==='correction'?'/admin/corrections/'+id+'/decision':'/admin/reinstatements/'+id+'/decision';
+    const button=form.querySelector('button[type=submit]'),status=form.querySelector('#review-decision-status');
+    reviewSubmitting=true;button.disabled=true;status.textContent='Menyimpan keputusan…';
+    let saved=false;
+    try{
+      const payload={decision,reason};
+      if(kind==='transaction'&&Number.isInteger(r.revision))payload.revision=r.revision;
+      await post(route,payload);saved=true;
+      toast('Keputusan tersimpan dengan audit trail.');
+      if(form.isConnected)closeModal();
+      if(state.page==='reviews')await nav('reviews');
+    }catch(err){status.textContent=err.message;toast(err.message,true)}
+    finally{reviewSubmitting=false;if(!saved)button.disabled=false}
+  };
+}
 async function reportsPage(){
  if(state.me.role==='admin' && (await json('/health')).mode==='DEMO LOCAL'){
    if(state.page!=='reports')return;
@@ -585,7 +674,7 @@ async function notificationsPage(){setHead('Notifications','Informasi transaksi 
 
 // Centralized delegated click handlers also work after page rerenders.
 document.addEventListener('click',async e=>{
- const el=e.target.closest('[data-nav],[data-edit],[data-detail],[data-correction],[data-reinstate],[data-reverse],[data-delete],[data-review],[data-publish],[data-activity],[data-escalate],[data-snooze]');if(!el)return;
+ const el=e.target.closest('[data-nav],[data-edit],[data-detail],[data-correction],[data-reinstate],[data-reverse],[data-delete],[data-review],[data-review-context],[data-publish],[data-activity],[data-escalate],[data-snooze]');if(!el)return;
  try{
  if(el.dataset.nav)await nav(el.dataset.nav);
  else if(el.dataset.edit){if(uploadPending.has(el.dataset.edit))return toast('Draft sedang diproses OCR.',true);await editDraft(el.dataset.edit)}
@@ -595,6 +684,7 @@ document.addEventListener('click',async e=>{
  else if(el.dataset.reverse)await actionReverse(el.dataset.reverse);
  else if(el.dataset.delete){if(uploadPending.has(el.dataset.delete))return toast('Tunggu OCR selesai sebelum menghapus draft.',true);await actionDelete(el.dataset.delete)}
  else if(el.dataset.review)await reviewAction(el.dataset.review);
+ else if(el.dataset.reviewContext)await reviewAction(el.dataset.reviewContext);
  else if(el.dataset.publish){if(confirm('Sudah memverifikasi daftar hari libur ini dengan sumber pemerintah resmi?')){await post('/admin/calendar/'+el.dataset.publish+'/publish',{});toast('Kalender dipublikasikan; SLA provisional pending difinalkan');await nav('calendar')}}
  else if(el.dataset.activity){let [id,closure_status]=el.dataset.activity.split(':');await patch('/admin/activities/'+id,{closure_status});state.config=await json('/config');await nav('management')}
  else if(el.dataset.escalate){let reason=prompt('Alasan eskalasi manual (minimal 5 karakter):');if(reason){await post('/admin/reinstatements/'+el.dataset.escalate+'/escalate',{reason});toast('Dikirim ke penugasan backup');await nav('reviews')}}
