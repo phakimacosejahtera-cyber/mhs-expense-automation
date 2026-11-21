@@ -292,7 +292,8 @@ async function uploadPage(){
     if(files.some(f=>f.size>8*1024*1024 || !f.size))return toast('Setiap file harus terisi dan berukuran maksimum 8 MB.',true);
     const btn=$('#batch-upload-button');
     const progress=message=>{const e=$('#ocr-upload-progress');if(e)e.textContent=message};
-    btn.disabled=true;
+    if(ocrBusy)return toast('OCR lain sedang berjalan. Tunggu proses selesai.',true);
+    ocrBusy=true;btn.disabled=true;
     const successes=[],failures=[];
     try{
       progress(`Menyiapkan batch ${files.length} kuitansi...`);
@@ -345,7 +346,7 @@ async function uploadPage(){
     }catch(err){
       toast(`Upload gagal: ${err.message}`,true);
       await nav('upload');
-    }finally{btn.disabled=false}
+    }finally{ocrBusy=false;btn.disabled=false}
   });
 
   $('#submit-selected').addEventListener('click',async()=>{
@@ -362,25 +363,46 @@ async function uploadPage(){
   });
 }
 
+// OCR evidence is never an instruction or a verified accounting value.
+let ocrBusy=false;
+function renderOCREvidence(result){
+  if(!result)return '<p class="tiny">Belum ada hasil OCR. Isi manual atau coba baca ulang gambar asli.</p>';
+  const suggestions=result.suggestions||{};
+  const labelled=Array.isArray(result.labelled_amounts)?result.labelled_amounts:[];
+  const amounts=Array.isArray(suggestions.amounts)?suggestions.amounts:[];
+  const kindNames={bruto:'Bruto / insentif',neto:'Neto / diterima',total:'Total',potongan_pajak:'Potongan pajak'};
+  const valid=x=>x&&Number.isFinite(Number(x.value))&&Number(x.value)>0&&Number(x.value)<=999999999999;
+  const money=[...labelled.filter(valid),...amounts.filter(x=>valid(x)&&!labelled.some(y=>Number(y.value)===Number(x.value)))];
+  const moneyRows=money.map(x=>`<div class="ocr-evidence-row"><div><b>${h(kindNames[x.kind]||'Kandidat nominal')} · ${rp(Math.round(Number(x.value)*100))}</b><small>${h(x.label||'Periksa dokumen asli')}</small></div>${x.kind==='potongan_pajak'?'<span class="tiny">Informasi pajak</span>':`<button type="button" class="btn soft" data-ocr-amount="${h(x.value)}">Pakai</button>`}</div>`).join('');
+  const dates=(Array.isArray(suggestions.dates)?suggestions.dates:[]).filter(x=>typeof x==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(x));
+  const dateRows=dates.map(x=>`<button type="button" class="btn soft" data-ocr-date="${h(x)}">Pakai ${h(x)}</button>`).join(' ');
+  const context=Array.isArray(result.date_context)?result.date_context:[];
+  const fields=result.field_candidates||{};
+  const fieldNames={vendor:'Vendor',description:'Keterangan',payment_method:'Metode pembayaran',invoice_number:'Nomor invoice / dokumen'};
+  const fieldRows=Object.entries(fieldNames).map(([key,label])=>{
+    const values=Array.isArray(fields[key])?fields[key].filter(x=>typeof x==='string').slice(0,3):[];
+    return values.length?`<div class="ocr-field-group"><b class="tiny">${label}</b>${values.map(v=>`<div class="ocr-evidence-row"><small>${h(v)}</small><button type="button" class="btn soft" data-ocr-field="${key}" data-ocr-value="${h(v)}">Pakai</button></div>`).join('')}</div>`:'';
+  }).join('');
+  // Keyword suggestions come exclusively from explicit description candidates.
+  const descriptions=(Array.isArray(fields.description)?fields.description:[]).join(' ');
+  const categoryRules=[[/\b(?:laptop|komputer|printer|alat\s+tulis|atk)\b/i,'Peralatan Kantor / IT'],[/\b(?:honorarium|insentif)\b/i,'Honorarium / Insentif'],[/\b(?:transportasi|taksi|parkir|tol)\b/i,'Transportasi']];
+  const cats=categoryRules.filter(([rx])=>rx.test(descriptions)).map(([,name])=>state.config.categories.find(c=>c.name===name)).filter(Boolean);
+  return `<p class="tiny">Cocokkan setiap saran dengan dokumen asli. Bruto, neto, dan potongan pajak bukan nilai yang dapat dipertukarkan.</p>
+   <b class="tiny">Kandidat nominal</b>${moneyRows||'<p class="tiny muted">Tidak terdeteksi. Isi manual.</p>'}
+   <b class="tiny">Kandidat tanggal</b><div class="row wrap" style="gap:6px">${dateRows||'<span class="tiny muted">Tidak terdeteksi. Isi manual.</span>'}</div>
+   ${context.length?`<div class="ocr-context"><b>Tanggal referensi surat mungkin bukan tanggal pembayaran.</b>${context.map(x=>`<p>${h(x)}</p>`).join('')}</div>`:''}
+   ${fieldRows||'<p class="tiny muted">Tidak ada kandidat vendor, keterangan, metode bayar atau nomor dokumen yang cukup jelas.</p>'}
+   ${cats.length?`<b class="tiny">Saran kategori berdasarkan keterangan</b><div class="row wrap">${cats.map(c=>`<button type="button" class="btn soft" data-ocr-field="category_id" data-ocr-value="${h(c.id)}">${h(c.name)}</button>`).join('')}</div>`:''}
+   <details class="mt"><summary>Teks mentah OCR (${Number.isFinite(result.confidence)?Math.round(result.confidence)+'% skor mesin':'tanpa skor'}; bukan akurasi terukur)</summary><pre style="white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto">${h((result.text||'').slice(0,16000))}</pre></details>`;
+}
+
 async function editDraft(id){
   const t=state.transactions.find(x=>x.id===id)||(await loadTx()).find(x=>x.id===id);
   if(!t)return toast('Draft tidak ditemukan',true);
   let result=state.ocrResults.get(id);
-  if(!result){
-    try{result=await json('/transactions/'+id+'/ocr-result');state.ocrResults.set(id,result)}
-    catch(err){if(!err.message.includes('404'))console.info('Histori OCR belum tersedia:',err.message)}
-  }
-  const suggestions=result?.suggestions||{amounts:[],dates:[]};
-  const candidates=(suggestions.amounts||[]).filter(x=>Number.isFinite(Number(x.value)));
-  const dates=(suggestions.dates||[]).filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x));
-  const moneyButtons=candidates.length?candidates.map(x=>
-    `<button type="button" class="btn soft" data-ocr-amount="${h(x.value)}" title="${h(x.label||'')}" style="white-space:normal">Pakai ${rp(Math.round(Number(x.value)*100))}</button>`).join(' '):'<span class="muted tiny">Nominal tidak terdeteksi secara meyakinkan. Isi manual.</span>';
-  const dateButtons=dates.length?dates.map(x=>`<button type="button" class="btn soft" data-ocr-date="${h(x)}">Pakai ${h(x)}</button>`).join(' '):'<span class="muted tiny">Tanggal tidak terdeteksi. Isi manual.</span>';
-  const ocrPanel=result?`<div class="notice" style="grid-column:1/-1"><b>Hasil Tesseract.js — BELUM DIVERIFIKASI (tulisan tangan bisa tidak terbaca)</b><p class="tiny">Pilih angka/tanggal dari teks yang benar sesuai dokumen asli; OCR bisa salah membaca nominal, pajak, potongan, atau tanggal surat.</p>
-      <p class="tiny"><b>Saran nominal</b></p><div class="row wrap" style="gap:6px">${moneyButtons}</div>
-      <p class="tiny mt"><b>Saran tanggal</b></p><div class="row wrap" style="gap:6px">${dateButtons}</div>
-      <details class="mt"><summary>Lihat teks mentah OCR (${result.confidence===null?'tanpa skor':Math.round(result.confidence)+'%'} skor mesin OCR (bukan akurasi terukur))</summary><pre style="white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto">${h((result.text||'').slice(0,16000))}</pre></details>
-    </div>`:`<div class="notice" style="grid-column:1/-1">Belum ada hasil OCR untuk draft ini. Periksa kuitansi asli dan isi secara manual (termasuk jika file PDF).</div>`;
+  try{result=await json('/transactions/'+id+'/ocr-result');state.ocrResults.set(id,result)}
+  catch(err){if(!result)result=null}
+  const ocrPanel=`<div class="notice" style="grid-column:1/-1"><b>Saran OCR — BELUM DIVERIFIKASI</b><div id="ocr-evidence">${renderOCREvidence(result)}</div><div class="mt row wrap"><button type="button" class="btn outline" id="retry-ocr">Baca ulang gambar</button><span class="tiny" id="retry-ocr-status" role="status"></span></div></div>`;
   let existingRisks=[];try{existingRisks=JSON.parse(t.risk_reasons||'[]')}catch{}
   const mixed=existingRisks.some(x=>/beberapa kategori/i.test(x));
   const body=`<div class="notice">Semua hasil OCR merupakan saran. Data resmi belum berubah sampai kamu menyimpan draft dan mengikuti approval.</div>
@@ -404,8 +426,35 @@ async function editDraft(id){
     const amount=ev.target.closest('[data-ocr-amount]');
     if(amount){draftForm.elements.amount.value=amount.dataset.ocrAmount;return}
     const date=ev.target.closest('[data-ocr-date]');
-    if(date){draftForm.elements.transaction_date.value=date.dataset.ocrDate}
+    if(date){draftForm.elements.transaction_date.value=date.dataset.ocrDate;return}
+    const fieldBtn=ev.target.closest('[data-ocr-field]');
+    if(fieldBtn && ['vendor','description','payment_method','invoice_number','category_id'].includes(fieldBtn.dataset.ocrField)){
+      const field=draftForm.elements.namedItem(fieldBtn.dataset.ocrField);
+      if(field)field.value=fieldBtn.dataset.ocrValue;
+    }
   });
+  $('#retry-ocr').onclick=async()=>{
+    if(ocrBusy)return toast('OCR lain sedang berjalan. Tunggu proses selesai.',true);
+    const btn=$('#retry-ocr'),status=$('#retry-ocr-status');
+    let engine=null;ocrBusy=true;btn.disabled=true;
+    try{
+      status.textContent='Mengambil dokumen asli...';
+      const response=await api('/receipts/'+encodeURIComponent(t.document_id));
+      const blob=await response.blob();
+      const type=blob.type.split(';')[0].toLowerCase();
+      if(!['image/png','image/jpeg','image/webp'].includes(type))throw new Error('Baca ulang saat ini hanya mendukung gambar JPG/PNG/WebP. PDF tetap manual.');
+      if(blob.size>8*1024*1024||!blob.size)throw new Error('Ukuran dokumen tidak didukung.');
+      engine=await loadBrowserOCR();
+      const file=new File([blob],'receipt.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}[type]),{type});
+      const result=await engine.recognize(file,(msg,pct)=>{status.textContent=msg+(pct===null?'':' '+pct+'%')});
+      await post('/transactions/'+id+'/ocr-result',{text:result.text.slice(0,16000),confidence:result.confidence,suggestions:result.suggestions});
+      const enriched=await json('/transactions/'+id+'/ocr-result');
+      state.ocrResults.set(id,enriched);
+      state.ocrStatus.set(id,'OCR dibaca ulang; belum diverifikasi');
+      if(draftForm.isConnected){draftForm.querySelector('#ocr-evidence').innerHTML=renderOCREvidence(enriched);status.textContent='Selesai. Isian formulir tetap dipertahankan.'}
+    }catch(err){status.textContent=err.message;toast(err.message,true)}
+    finally{if(engine)try{await engine.close()}catch{}ocrBusy=false;btn.disabled=false}
+  };
   draftForm.onsubmit=async ev=>{
     ev.preventDefault();
     const f=new FormData(draftForm);
