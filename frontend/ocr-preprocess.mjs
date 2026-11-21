@@ -50,7 +50,7 @@ export function enhancePixels(pixels,width,height,variant='contrast'){
       const avg=(gray[i-1]+gray[i+1]+gray[i-width]+gray[i+width])/4;
       sharpen=clamp(v+.65*(v-avg));
     }
-    const value=clamp((sharpen-lo)*255/span);
+    const value=hi-lo<12?v:clamp((sharpen-lo)*255/span);
     const p=i*4;pixels[p]=pixels[p+1]=pixels[p+2]=value;pixels[p+3]=255;
   }
   return pixels;
@@ -75,8 +75,10 @@ export async function enhancedImageBlob(file,{variant='contrast',rotation=0,desk
     const [canvas,ctx]=canvasOf(Math.max(1,Math.floor(bw*fit)),Math.max(1,Math.floor(bh*fit)));
     ctx.translate(canvas.width/2,canvas.height/2);ctx.rotate(rad);
     ctx.drawImage(bitmap,-w*fit/2,-h*fit/2,w*fit,h*fit);
-    const img=ctx.getImageData(0,0,canvas.width,canvas.height);
-    enhancePixels(img.data,canvas.width,canvas.height,variant);ctx.putImageData(img,0,0);
+    if(variant!=='original'){
+      const img=ctx.getImageData(0,0,canvas.width,canvas.height);
+      enhancePixels(img.data,canvas.width,canvas.height,variant);ctx.putImageData(img,0,0);
+    }
     try{return await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('Gagal memproses gambar')),'image/png'))}
     finally{canvas.width=1;canvas.height=1}
   }finally{bitmap.close?.()}
