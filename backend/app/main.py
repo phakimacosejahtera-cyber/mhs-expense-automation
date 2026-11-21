@@ -218,6 +218,16 @@ if APP_MODE == 'demo' and CLOUD_STORAGE is None:
     import tempfile
     import shutil
 
+    @app.get('/api/admin/storage/status')
+    def local_storage_status(request:Request):
+        admin_only(auth(request))
+        import sqlite3
+        from .storage_local import storage_status
+        try:
+            return storage_status(DATA)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error):
+            raise HTTPException(503,'Penyimpanan belum dapat diperiksa. Coba lagi.') from None
+
     @app.get('/api/admin/backup/status')
     def backup_status(request:Request):
         admin_only(auth(request))
@@ -343,6 +353,12 @@ def store_file(data,ext):
             return CLOUD_STORAGE.put(data,ext)
         except StorageError:
             raise HTTPException(503,'Penyimpanan cloud uji tidak tersedia') from None
+    if APP_MODE == 'demo':
+        from .storage_local import write_receipt
+        try:
+            return write_receipt(DATA,uid()+ext,data)
+        except (OSError, ValueError):
+            raise HTTPException(503,'Kuitansi belum tersimpan. Periksa ruang penyimpanan dan coba kembali.') from None
     folder=DATA/'private_docs';folder.mkdir(parents=True,exist_ok=True)
     key=uid()+ext;path=folder/key;path.write_bytes(data)
     return str(path)
