@@ -82,6 +82,22 @@ with TestClient(app) as c:
     assert empty_wb['Ringkasan']['B3'].value==0
     assert empty_wb['Pemasukan'].tables['MHS_Pemasukan'].ref=='A1:E2'
     assert empty_wb['Ringkasan']['A13'].value=='Februari'
+    overall=c.get('/api/finance/summary?year=0').json()
+    assert overall['income_cents']==45000000 and overall['total_cents']==5012300,overall
+    assert overall['net_cents']==39987700
+    assert {2024,2025}.issubset(set(overall['available_years']))
+    assert [x['year'] for x in overall['annual']]==[2024,2025]
+    assert c.get('/api/finance/summary?year=0&month=1').status_code==422
+    all_report=c.get('/api/finance/export?year=0')
+    assert all_report.status_code==200,all_report.text
+    all_wb=load_workbook(BytesIO(all_report.content))
+    assert all_wb['Ringkasan']['B2'].value=='Semua Tahun'
+    assert all_wb['Ringkasan']['B3'].value==450000
+    assert all_wb['Ringkasan']['B4'].value==50123
+    assert all_wb['Ringkasan']['A13'].value==2024
+    assert all_wb['Ringkasan']['A14'].value==2025
+    assert 'DATE(2024,1,1)' in all_wb['Ringkasan']['B13'].value
+
 
     assert post('/api/admin/users',{'name':'Fixture Uploader','email':'fixture@example.invalid','password':'FixturePassword123','role':'uploader'}).status_code==200
     with TestClient(app) as other:
