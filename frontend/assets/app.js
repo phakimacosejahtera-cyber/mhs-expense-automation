@@ -253,12 +253,47 @@ async function saveHybridOCR(id,result,progress){
   const paddle=await post('/transactions/'+id+'/paddle-ocr',{browser_run_id:run?.run_id||null});
   if(paddle.status!=='EXTRACTED'&&!run)throw Error(paddle.message||'OCR tidak tersedia');
   const enriched=await json('/transactions/'+id+'/ocr-result');
-  return {...enriched,paddle_status:paddle.status};
+  return {...enriched,paddle_status:paddle.status,paddle_error:paddle.error_code||null};
 }
 
+
+const uploadPending=new Set();
+let uploadProgress='';
+function draftBatchRows(drafts,selected=new Set()){
+  return drafts.length?drafts.map(t=>{
+        const risks=(()=>{try{return JSON.parse(t.risk_reasons||'[]')}catch{return []}})();
+        const ocr=state.ocrStatus.get(t.id);
+        const pending=uploadPending.has(t.id);
+        return `<div class="draft-item"><div class="details"><label class="checkrow"><input type="checkbox" class="select-draft" value="${h(t.id)}" ${pending?'disabled':selected.has(t.id)?'checked':''}><strong>${h(t.description||'Draft kuitansi')}</strong></label>
+          <p>${h(t.activity_name)} • ${rp(t.amount_cents)} • ${h(t.transaction_date||'Tanggal belum diisi')}</p>
+          <div>${pill(t.status)} ${risks.map(x=>`<span class="pill PENDING">${h(x)}</span>`).join('')}</div>
+          ${ocr?`<p class="tiny muted">OCR: ${h(ocr)}</p>`:''}</div>
+          <div class="inline-actions"><button class="btn soft" data-edit="${h(t.id)}" ${pending?'disabled':''}>${pending?'OCR berlangsung…':'Periksa &amp; Edit'}</button><button class="btn danger" data-delete="${h(t.id)}" ${pending?'disabled':''}>Hapus Draft</button></div></div>`;
+      }).join(''):'<div class="empty">Belum ada draft. Unggah kuitansi terlebih dahulu.</div>';
+}
+function refreshDraftBatch(){
+  if(state.page!=='upload')return;
+  const grid=$('#draft-batch-grid');
+  if(!grid)return;
+  const selected=new Set([...grid.querySelectorAll('.select-draft:checked')].map(x=>x.value));
+  const drafts=state.transactions.filter(t=>t.status==='DRAFT');
+  grid.innerHTML=draftBatchRows(drafts,selected);
+  const count=$('#draft-batch-count');if(count)count.textContent=String(drafts.length);
+}
+function updateUploadProgress(message){
+  uploadProgress=message;
+  if(state.page==='upload'){
+    const e=$('#ocr-upload-progress');if(e)e.textContent=message;
+  }
+}
+async function reloadDraftBatch(){
+  try{await loadTx();refreshDraftBatch();return true}
+  catch(err){console.warn('Draft refresh failed:',err.message);return false}
+}
 async function uploadPage(){
-  setHead('Upload Receipt','Upload batch, baca kuitansi dengan Tesseract.js, periksa data, lalu submit sebagian');
+  setHead('Upload Receipt','Upload batch, baca kuitansi dengan Hybrid OCR, periksa data, lalu submit sebagian');
   await loadTx();
+  if(state.page!=='upload')return;
   const acts=state.config.activities;
   const drafts=state.transactions.filter(t=>t.status==='DRAFT');
   $('#page-content').innerHTML=`
@@ -272,28 +307,20 @@ async function uploadPage(){
             <p class="muted tiny">Boleh pilih beberapa file sekaligus. Setiap kuitansi disimpan sebagai draft.</p>
             <input id="upload-files" name="files" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple required>
           </div>
-          <div class="mt row wrap"><button class="btn primary" id="batch-upload-button" type="submit">Upload &amp; Buat Draft →</button>
+          <div class="mt row wrap"><button class="btn primary" id="batch-upload-button" type="submit" ${ocrBusy?'disabled':''}>Upload &amp; Buat Draft →</button>
             <span class="tiny muted">OCR lokal gambar dan PDF hingga 5 halaman; input manual selalu tersedia.</span></div>
-          <p id="ocr-upload-progress" role="status" aria-live="polite" class="tiny muted mt"></p>
+          <p id="ocr-upload-progress" role="status" aria-live="polite" class="tiny muted mt">${h(uploadProgress)}</p>
         </form>
       </section>
       <section class="panel panelpad"><h3>02. Periksa Hasil</h3>
         <p class="muted">Kuitansi yang siap dapat disubmit tanpa menunggu kuitansi lain.</p>
         <div class="notice mt">Hasil OCR adalah saran, bukan data resmi. Periksa kuitansi asli dan pilih nominal/tanggal yang benar. Semua hasil OCR browser masih wajib melewati review admin pada mode demo.</div>
-        <div class="mt"><strong>${drafts.length}</strong> draft aktif tersedia</div>
+        <div class="mt"><strong id="draft-batch-count">${drafts.length}</strong> draft aktif tersedia</div>
       </section>
     </div>
     <section class="panel mt"><div class="panelhead"><div><h3>03. Draft Batch Review</h3><small>Pilih draft lengkap untuk submit; dapat dilakukan sebagian.</small></div><button class="btn primary" id="submit-selected">Submit Terpilih →</button></div>
-      <div class="panelpad draftgrid">
-      ${drafts.length?drafts.map(t=>{
-        const risks=(()=>{try{return JSON.parse(t.risk_reasons||'[]')}catch{return []}})();
-        const ocr=state.ocrStatus.get(t.id);
-        return `<div class="draft-item"><div class="details"><label class="checkrow"><input type="checkbox" class="select-draft" value="${h(t.id)}"><strong>${h(t.description||'Draft kuitansi')}</strong></label>
-          <p>${h(t.activity_name)} • ${rp(t.amount_cents)} • ${h(t.transaction_date||'Tanggal belum diisi')}</p>
-          <div>${pill(t.status)} ${risks.map(x=>`<span class="pill PENDING">${h(x)}</span>`).join('')}</div>
-          ${ocr?`<p class="tiny muted">OCR: ${h(ocr)}</p>`:''}</div>
-          <div class="inline-actions"><button class="btn soft" data-edit="${h(t.id)}">Periksa &amp; Edit</button><button class="btn danger" data-delete="${h(t.id)}">Hapus Draft</button></div></div>`;
-      }).join(''):'<div class="empty">Belum ada draft. Unggah kuitansi terlebih dahulu.</div>'}
+      <div id="draft-batch-grid" class="panelpad draftgrid">
+      ${draftBatchRows(drafts)}
       </div>
     </section>`;
 
@@ -305,7 +332,7 @@ async function uploadPage(){
     if(!files.length)return toast('Pilih kuitansi terlebih dahulu',true);
     if(files.some(f=>f.size>8*1024*1024 || !f.size))return toast('Setiap file harus terisi dan berukuran maksimum 8 MB.',true);
     const btn=$('#batch-upload-button');
-    const progress=message=>{const e=$('#ocr-upload-progress');if(e)e.textContent=message};
+    const progress=updateUploadProgress;
     if(ocrBusy)return toast('OCR lain sedang berjalan. Tunggu proses selesai.',true);
     ocrBusy=true;btn.disabled=true;
     const successes=[],failures=[];
@@ -317,7 +344,11 @@ async function uploadPage(){
         try{
           const fd=new FormData();fd.append('file',file);
           const uploaded=await json('/batches/'+batch.id+'/documents',{method:'POST',body:fd});
-          successes.push({file,id:uploaded.transaction_id});
+          const id=uploaded.transaction_id;
+          successes.push({file,id});
+          uploadPending.add(id);
+          state.ocrStatus.set(id,'Draft tersimpan — menunggu OCR');
+          await reloadDraftBatch();
         }catch(err){failures.push(`${file.name}: ${err.message}`)}
       }
 
@@ -335,38 +366,50 @@ async function uploadPage(){
             count++;
             const report=(status,pct)=>progress(`OCR ${count}/${images.length} — ${file.name}: ${status}${pct===null?'':' '+pct+'%'}`);
             try{
+              state.ocrStatus.set(id,'Sedang diproses OCR…');refreshDraftBatch();
               let result=null;
               if(ocr)try{result=await recognizeReceipt(ocr,file,id,report)}catch(err){console.warn('Tesseract gagal:',err.message)}
               const enriched=await saveHybridOCR(id,result,report);
               state.ocrResults.set(id,enriched);
-              state.ocrStatus.set(id,enriched.paddle_status==='EXTRACTED'?'PaddleOCR selesai; belum diverifikasi':'Tesseract saja — PaddleOCR '+enriched.paddle_status);
+              state.ocrStatus.set(id,enriched.paddle_status==='EXTRACTED'?'PaddleOCR selesai; belum diverifikasi':'Tesseract saja — PaddleOCR '+(enriched.paddle_error||enriched.paddle_status));
             }catch(err){state.ocrStatus.set(id,`OCR gagal: ${err.message}. Isi manual.`)}
+            finally{uploadPending.delete(id);refreshDraftBatch()}
           }
         }finally{
           if(ocr)try{await ocr.close()}catch(err){console.warn('Menutup OCR worker:',err)}
         }
       }
-      for(const {file,id} of successes.filter(x=>!isImageOCRFile(x.file)))
+      for(const {file,id} of successes.filter(x=>!isImageOCRFile(x.file))){
+        uploadPending.delete(id);
         state.ocrStatus.set(id,`${file.name}: Format tidak didukung OCR; isi manual.`);
-      await nav('upload');
+      }
+      await reloadDraftBatch();
+      if(form.isConnected)form.reset();
+      progress(`${successes.length} draft tersimpan; proses OCR selesai. Periksa hasil sebelum submit.`);
       toast(`${successes.length} draft berhasil dibuat${failures.length?`; ${failures.length} gagal diunggah`:''}. Periksa & Edit sebelum submit.`,!!failures.length);
       if(failures.length)console.warn('Upload gagal:',failures);
     }catch(err){
       toast(`Upload gagal: ${err.message}`,true);
-      await nav('upload');
-    }finally{ocrBusy=false;btn.disabled=false}
+      await reloadDraftBatch();
+      progress('Proses terhenti; draft yang tersimpan tetap tersedia.');
+    }finally{
+      for(const {id} of successes)uploadPending.delete(id);
+      ocrBusy=false;btn.disabled=false;
+      if(state.page==='upload'){const current=$('#batch-upload-button');if(current)current.disabled=false;refreshDraftBatch()}
+    }
   });
 
   $('#submit-selected').addEventListener('click',async()=>{
     const ids=[...document.querySelectorAll('.select-draft:checked')].map(x=>x.value);
     if(!ids.length)return toast('Pilih minimal satu draft',true);
     try{
+      if(ids.some(id=>uploadPending.has(id)))throw Error('Tunggu OCR pada draft terpilih selesai.');
       const closed=ids.some(id=>{const t=state.transactions.find(t=>t.id===id);return state.config.activities.find(a=>a.id===t.activity_id)?.closure_status==='CLOSED'});
       const late_reason=closed?prompt('Aktivitas telah ditutup. Isi alasan keterlambatan (wajib):'):null;
       if(closed&&!late_reason)return;
       const result=await post('/transactions/submit-batch',{ids,late_reason});
       toast(`${result.items.length} transaksi berhasil disubmit`);
-      await nav('upload');
+      await reloadDraftBatch();
     }catch(err){toast(err.message,true)}
   });
 }
@@ -461,7 +504,7 @@ async function editDraft(id){
       const enriched=await saveHybridOCR(id,result,report);
       state.ocrResults.set(id,enriched);
       state.ocrStatus.set(id,'OCR dibaca ulang; belum diverifikasi');
-      if(draftForm.isConnected){draftForm.querySelector('#ocr-evidence').innerHTML=renderOCREvidence(enriched);status.textContent=(enriched.paddle_status==='EXTRACTED'?'PaddleOCR selesai. ':'PaddleOCR '+enriched.paddle_status+'. ')+'Isian formulir tetap dipertahankan.'}
+      if(draftForm.isConnected){draftForm.querySelector('#ocr-evidence').innerHTML=renderOCREvidence(enriched);status.textContent=(enriched.paddle_status==='EXTRACTED'?'PaddleOCR selesai. ':'PaddleOCR '+(enriched.paddle_error||enriched.paddle_status)+'. ')+'Isian formulir tetap dipertahankan.'}
     }catch(err){status.textContent=err.message;toast(err.message,true)}
     finally{if(engine)try{await engine.close()}catch{}ocrBusy=false;btn.disabled=false}
   };
@@ -545,12 +588,12 @@ document.addEventListener('click',async e=>{
  const el=e.target.closest('[data-nav],[data-edit],[data-detail],[data-correction],[data-reinstate],[data-reverse],[data-delete],[data-review],[data-publish],[data-activity],[data-escalate],[data-snooze]');if(!el)return;
  try{
  if(el.dataset.nav)await nav(el.dataset.nav);
- else if(el.dataset.edit)await editDraft(el.dataset.edit);
+ else if(el.dataset.edit){if(uploadPending.has(el.dataset.edit))return toast('Draft sedang diproses OCR.',true);await editDraft(el.dataset.edit)}
  else if(el.dataset.detail)await details(el.dataset.detail);
  else if(el.dataset.correction)await correctionForm(el.dataset.correction);
  else if(el.dataset.reinstate)await actionReinstate(el.dataset.reinstate);
  else if(el.dataset.reverse)await actionReverse(el.dataset.reverse);
- else if(el.dataset.delete)await actionDelete(el.dataset.delete);
+ else if(el.dataset.delete){if(uploadPending.has(el.dataset.delete))return toast('Tunggu OCR selesai sebelum menghapus draft.',true);await actionDelete(el.dataset.delete)}
  else if(el.dataset.review)await reviewAction(el.dataset.review);
  else if(el.dataset.publish){if(confirm('Sudah memverifikasi daftar hari libur ini dengan sumber pemerintah resmi?')){await post('/admin/calendar/'+el.dataset.publish+'/publish',{});toast('Kalender dipublikasikan; SLA provisional pending difinalkan');await nav('calendar')}}
  else if(el.dataset.activity){let [id,closure_status]=el.dataset.activity.split(':');await patch('/admin/activities/'+id,{closure_status});state.config=await json('/config');await nav('management')}
