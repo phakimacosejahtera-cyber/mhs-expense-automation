@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from .db import allrows, audit, now, one, tx
+from .db import DATA, allrows, audit, js, now, one, tx, uid
 from .security import admin_only, get_auth
 
 router = APIRouter(prefix="/api/finance")
@@ -96,24 +96,34 @@ def reverse_income(request: Request, entry_id: UUID, data: ReverseIn):
 def summary(request: Request, year: int | None = Query(None, ge=1900, le=9998),
             month: int | None = Query(None, ge=1, le=12)):
     owner(request)
+    data, _ = period_snapshot(year, month)
+    return data
+
+def period_snapshot(year=None, month=None):
     year = year or datetime.now(ZoneInfo("Asia/Jakarta")).year
     start, end = bounds(year, month)
     where = "status='APPROVED' AND deleted_at IS NULL AND transaction_date>=? AND transaction_date<?"
     params = (start, end)
     # One isolated SQLite transaction provides a consistent snapshot.
     with tx() as c:
-        expenses = allrows(c, "SELECT id,transaction_date,amount_cents,description,vendor,category_id FROM transactions WHERE "+where, params)
+        expenses = allrows(c, """SELECT id,transaction_date,amount_cents,description,vendor,category_id,
+             document_id,activity_id,payment_method,invoice_number,notes
+             FROM transactions WHERE """+where+" ORDER BY transaction_date,id", params)
         incomes = allrows(c, """SELECT id,transaction_date,amount_cents,description,sender,reversed_at,reversal_reason
              FROM income_entries WHERE transaction_date>=? AND transaction_date<?
              ORDER BY transaction_date DESC,created_at DESC,id""", params)
         categories = allrows(c, "SELECT id,name FROM categories")
+        activities = allrows(c, "SELECT id,name FROM activities")
         old = one(c, "SELECT value FROM app_settings WHERE key='total_income_cents'")
         pending = one(c, "SELECT count(*) AS n FROM transactions WHERE deleted_at IS NULL AND status='PENDING_REVIEW'")["n"]
         drafts = one(c, "SELECT count(*) AS n FROM transactions WHERE deleted_at IS NULL AND status='DRAFT'")["n"]
     names = {x["id"]: x["name"] for x in categories}
     monthly_in, monthly_out, cats = [0]*12, [0]*12, {}
+    activity_names = {x["id"]: x["name"] for x in activities}
     for item in expenses:
         key = names.get(item["category_id"], "Belum dikategorikan")
+        item["category_name"] = key
+        item["activity_name"] = activity_names.get(item["activity_id"], "")
         amount = int(item["amount_cents"] or 0)
         monthly_out[int(item["transaction_date"][5:7])-1] += amount
         cats[key] = cats.get(key, 0)+amount
@@ -127,4 +137,40 @@ def summary(request: Request, year: int | None = Query(None, ge=1900, le=9998),
             "monthly_income": monthly_in, "monthly_expense": monthly_out,
             "categories": [{"category": k, "total_cents": v} for k,v in sorted(cats.items(), key=lambda kv: (-kv[1],kv[0]))],
             "incomes": incomes, "drafts": drafts, "pending_review": pending,
-            "legacy_income_cents": int(old["value"]) if old else 0}
+            "legacy_income_cents": int(old["value"]) if old else 0}, expenses
+
+
+@router.get("/export")
+def export_finance(request: Request, year: int | None = Query(None, ge=1900, le=9998),
+                   month: int | None = Query(None, ge=1, le=12)):
+    from .finance_workbook import build_workbook
+    from fastapi.responses import FileResponse
+    u = owner(request)
+    data, expenses = period_snapshot(year, month)
+    # Never take the receipt origin from an untrusted Host header.
+    server = request.scope.get("server")
+    port = server[1] if server and isinstance(server[1], int) else 8001
+    base = f"http://127.0.0.1:{port}"
+    snapshot_at = now()
+    wb = build_workbook(data, expenses, base, snapshot_at)
+    key = uid()
+    directory = DATA / "exports"
+    directory.mkdir(exist_ok=True)
+    path = directory / (key + ".xlsx")
+    try:
+        wb.save(path)
+        with tx() as c:
+            filters = {"year": data["year"], "month": data["month"], "report": "finance"}
+            c.execute("INSERT INTO export_logs VALUES (?,?,?,?,?,?)",
+                      (key, u["id"], "all", js(filters), str(path), snapshot_at))
+            audit(c, u["id"], "FINANCE_EXPORTED", "export", key,
+                  {**filters, "income_cents": data["income_cents"], "expense_cents": data["total_cents"]})
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    finally:
+        wb.close()
+    period = str(data["year"]) + (f"-{data['month']:02d}" if data["month"] else "")
+    return FileResponse(path, filename=f"MHS_Rekap_Keuangan_{period}.xlsx",
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Cache-Control": "private, no-store"})
