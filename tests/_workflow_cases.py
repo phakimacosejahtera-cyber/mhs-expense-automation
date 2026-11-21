@@ -22,7 +22,8 @@ from openpyxl import load_workbook
 def client():
     assert APP_MODE == "demo" and CLOUD_STORAGE is None
     assert DATA.resolve() == root and DB_FILE.resolve() == root / "mhs_expenses.sqlite3"
-    assert not DB_FILE.exists(), "Expected a fresh isolated database"
+    # This path is a guarded temporary test directory, never the application directory.
+    DB_FILE.unlink(missing_ok=True)
     with TestClient(app) as c:
         # Multi-role accounts are fixtures only, not application seed accounts.
         with tx() as con:
