@@ -10,7 +10,7 @@ from .owner_auth import OwnerConfig, OwnerAuthError, new_verifier, authorize_url
 OWNER_CONFIG = OwnerConfig.from_env() if APP_MODE in ('owner_test', 'pg_test', 'hosted_preview') else None
 
 import os, json, hashlib, secrets, mimetypes, re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from datetime import datetime,timedelta,timezone
 from io import BytesIO
 from contextlib import asynccontextmanager
@@ -1038,35 +1038,8 @@ def manual_escalate(request:Request,request_id:str,data:Escalation):
         if result=='BLOCKED':raise HTTPException(409,'Tidak ada admin cadangan eligible; permintaan tetap pending')
     return {'assignment_stage':'BACKUP','status':'PENDING'}
 
-def active_draft_snapshot(c):
-    rows = allrows(c, "SELECT id,revision FROM transactions WHERE status='DRAFT' AND deleted_at IS NULL ORDER BY id")
-    token = hashlib.sha256(js([[r['id'], r['revision']] for r in rows]).encode()).hexdigest()
-    return rows, token
-
-@app.get('/api/admin/drafts/cleanup')
-def preview_draft_cleanup(request: Request):
-    admin_only(auth(request))
-    with connection() as c:
-        rows, token = active_draft_snapshot(c)
-    return {'count': len(rows), 'token': token}
-
 class DraftCleanup(BaseModel):
     token: str = Field(min_length=64, max_length=64)
-
-@app.post('/api/admin/drafts/cleanup')
-def bulk_delete_drafts(request: Request, data: DraftCleanup):
-    user = auth(request, True)
-    admin_only(user)
-    with tx() as c:
-        rows, token = active_draft_snapshot(c)
-        if token != data.token:
-            raise HTTPException(409, 'Daftar draft berubah. Periksa jumlahnya kembali.')
-        deleted_at = now()
-        expiry = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(timespec='seconds')
-        c.execute("UPDATE transactions SET deleted_at=?,purge_at=? WHERE status='DRAFT' AND deleted_at IS NULL", (deleted_at, expiry))
-        for row in rows:
-            audit(c, user['id'], 'DRAFT_SOFT_DELETED', 'transaction', row['id'], {'purge_at': expiry, 'bulk': True})
-    return {'count': len(rows)}
 
 @app.delete('/api/transactions/{txid}/draft')
 def delete_draft(request:Request,txid:str):
@@ -1103,7 +1076,9 @@ def finish_local_draft_purges(job_id=None):
                 path = Path(ref)
                 if path.parent.resolve() != (DATA/'private_docs').resolve():
                     raise ValueError('Lokasi file tidak valid')
-                if not one(c, 'SELECT id FROM document_versions WHERE storage_path=? LIMIT 1', (ref,)):
+                # A database copied from another machine can have a different
+                # directory prefix for the same locally stored receipt.
+                if not one(c, 'SELECT id FROM document_versions WHERE LOWER(storage_path) LIKE ? LIMIT 1', ('%'+path.name.lower(),)):
                     try:
                         path.unlink(missing_ok=True)
                     except OSError:
@@ -1123,9 +1098,23 @@ def require_local_purge(request, write):
     return user
 
 def queue_draft_purge(c, txid, doc, user):
-    refs=[v['storage_path'] for v in allrows(c,'SELECT storage_path FROM document_versions WHERE document_id=?',(doc,))]
-    if any(Path(ref).parent.resolve() != (DATA/'private_docs').resolve() for ref in refs):
-        raise HTTPException(409,'Lokasi file tidak sesuai dengan penyimpanan lokal.')
+    folder = DATA.resolve() / 'private_docs'
+    if folder.resolve() != folder:
+        raise HTTPException(409, 'Periksa folder penyimpanan kuitansi lokal.')
+    refs = []
+    versions = allrows(c, 'SELECT storage_path,file_size,sha256 FROM document_versions WHERE document_id=?', (doc,))
+    for version in versions:
+        ref = version['storage_path']
+        stored = PureWindowsPath(ref)
+        if stored.parent.name.lower() != 'private_docs' or not re.fullmatch(r'[a-fA-F0-9-]{36}\.(?:pdf|png|jpg|webp)', stored.name, re.I):
+            raise HTTPException(409, 'Referensi kuitansi tidak dikenali. Periksa arsip sebelum menghapus draft.')
+        path = folder / stored.name
+        if path.is_symlink():
+            raise HTTPException(409, 'Lokasi kuitansi merujuk ke tautan file.')
+        if Path(ref).parent.resolve() != folder and path.exists():
+            if path.stat().st_size != version['file_size'] or hashlib.sha256(path.read_bytes()).hexdigest() != version['sha256']:
+                raise HTTPException(409, 'Salinan kuitansi lokal berbeda dari arsip draft.')
+        refs.append(str(path))
     job=uid()
     c.execute("INSERT INTO background_jobs(id,kind,status,payload,created_at,updated_at) VALUES (?,'LOCAL_DRAFT_UNLINK','PENDING',?,?,?)",(job,js(refs),now(),now()))
     c.execute('DELETE FROM extraction_runs WHERE document_id=?',(doc,))
