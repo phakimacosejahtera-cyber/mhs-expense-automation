@@ -554,7 +554,7 @@ async function editDraft(id){
     <form id="draft-form" class="grid2" style="align-content:start">${ocrPanel}
       ${field('Tanggal transaksi*','transaction_date',t.transaction_date||'','date',true)}
       ${field('Nominal IDR*','amount',t.amount_cents===null?'':t.amount_cents/100,'number',true,'min="0" step="0.01"')}
-      ${field('Kategori*','category_name',t.category_name||'','text',true,'maxlength="120" placeholder="Ketik kategori pengeluaran"')}
+      ${field('Kategori*','category_name',t.category_name||'','text',true,'maxlength="120"')}
       ${field('Vendor','vendor',t.vendor||'')}
       ${field('Keterangan*','description',t.description||'','text',true)}
       ${field('Metode Pembayaran','payment_method',t.payment_method||'')}
