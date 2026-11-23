@@ -1080,6 +1080,17 @@ def delete_draft(request:Request,txid:str):
         audit(c,u['id'],'DRAFT_SOFT_DELETED','transaction',txid,{'purge_at':expiry})
     return {'status':'SOFT_DELETED','purge_at':expiry}
 
+@app.get('/api/admin/drafts/deleted')
+def deleted_drafts(request: Request):
+    admin_only(auth(request))
+    with connection() as c:
+        return allrows(c, """SELECT t.id,t.description,t.purge_at,v.filename,u.name AS uploader_name
+            FROM transactions t JOIN users u ON u.id=t.uploader_id
+            JOIN documents d ON d.id=t.document_id
+            LEFT JOIN document_versions v ON v.id=d.active_version_id
+            WHERE t.status='DRAFT' AND t.deleted_at IS NOT NULL AND t.purge_at>?
+            ORDER BY t.deleted_at DESC,t.id""", (now(),))
+
 @app.post('/api/admin/transactions/{txid}/restore')
 def restore_draft(request:Request,txid:str):
     u=auth(request,True);admin_only(u)
