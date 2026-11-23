@@ -1115,28 +1115,57 @@ def finish_local_draft_purges(job_id=None):
                 return False
     return True
 
-@app.delete('/api/admin/drafts/{txid}/permanent')
-def purge_deleted_draft(request:Request, txid:str):
-    user=auth(request, True)
+def require_local_purge(request, write):
+    user = auth(request, write)
     admin_only(user)
     if APP_MODE != 'demo' or CLOUD_STORAGE is not None:
-        raise HTTPException(409,'Penghapusan file hanya tersedia pada penyimpanan lokal.')
+        raise HTTPException(409, 'Penghapusan file hanya tersedia pada penyimpanan lokal.')
+    return user
+
+def queue_draft_purge(c, txid, doc, user):
+    refs=[v['storage_path'] for v in allrows(c,'SELECT storage_path FROM document_versions WHERE document_id=?',(doc,))]
+    if any(Path(ref).parent.resolve() != (DATA/'private_docs').resolve() for ref in refs):
+        raise HTTPException(409,'Lokasi file tidak sesuai dengan penyimpanan lokal.')
+    job=uid()
+    c.execute("INSERT INTO background_jobs(id,kind,status,payload,created_at,updated_at) VALUES (?,'LOCAL_DRAFT_UNLINK','PENDING',?,?,?)",(job,js(refs),now(),now()))
+    c.execute('DELETE FROM extraction_runs WHERE document_id=?',(doc,))
+    c.execute('DELETE FROM transactions WHERE id=?',(txid,))
+    c.execute('DELETE FROM document_versions WHERE document_id=?',(doc,))
+    c.execute('DELETE FROM documents WHERE id=?',(doc,))
+    audit(c,user['id'],'DRAFT_PURGED','transaction',txid,{})
+    return job
+
+@app.delete('/api/admin/drafts/{txid}/permanent')
+def purge_deleted_draft(request:Request, txid:str):
+    user = require_local_purge(request, True)
     with tx() as c:
-        draft=one(c,"SELECT document_id FROM transactions WHERE id=? AND status='DRAFT' AND deleted_at IS NOT NULL",(txid,))
+        draft = one(c, "SELECT document_id FROM transactions WHERE id=? AND status='DRAFT' AND deleted_at IS NOT NULL", (txid,))
         if not draft:
-            raise HTTPException(409,'Draft sudah berubah. Muat ulang daftar.')
-        doc=draft['document_id']
-        refs=[v['storage_path'] for v in allrows(c,'SELECT storage_path FROM document_versions WHERE document_id=?',(doc,))]
-        if any(Path(ref).parent.resolve() != (DATA/'private_docs').resolve() for ref in refs):
-            raise HTTPException(409,'Lokasi file tidak sesuai dengan penyimpanan lokal.')
-        job=uid()
-        c.execute("INSERT INTO background_jobs(id,kind,status,payload,created_at,updated_at) VALUES (?,'LOCAL_DRAFT_UNLINK','PENDING',?,?,?)",(job,js(refs),now(),now()))
-        c.execute('DELETE FROM extraction_runs WHERE document_id=?',(doc,))
-        c.execute('DELETE FROM transactions WHERE id=?',(txid,))
-        c.execute('DELETE FROM document_versions WHERE document_id=?',(doc,))
-        c.execute('DELETE FROM documents WHERE id=?',(doc,))
-        audit(c,user['id'],'DRAFT_PURGED','transaction',txid,{})
-    return {'files_removed':finish_local_draft_purges(job)}
+            raise HTTPException(409, 'Draft sudah berubah. Muat ulang daftar.')
+        job = queue_draft_purge(c, txid, draft['document_id'], user)
+    return {'files_removed': finish_local_draft_purges(job)}
+
+def trash_snapshot(c):
+    rows = allrows(c, "SELECT id,document_id,deleted_at,revision FROM transactions WHERE status='DRAFT' AND deleted_at IS NOT NULL ORDER BY id")
+    return rows, hashlib.sha256(js(rows).encode()).hexdigest()
+
+@app.get('/api/admin/drafts/empty-trash')
+def preview_empty_trash(request: Request):
+    require_local_purge(request, False)
+    with connection() as c:
+        rows, token = trash_snapshot(c)
+    return {'count': len(rows), 'token': token}
+
+@app.post('/api/admin/drafts/empty-trash')
+def empty_trash(request: Request, data: DraftCleanup):
+    user = require_local_purge(request, True)
+    with tx() as c:
+        rows, token = trash_snapshot(c)
+        if token != data.token:
+            raise HTTPException(409, 'Isi Draft terhapus berubah. Periksa jumlahnya kembali.')
+        jobs = [queue_draft_purge(c, row['id'], row['document_id'], user) for row in rows]
+    pending = sum(not finish_local_draft_purges(job) for job in jobs)
+    return {'count': len(rows), 'pending': pending}
 
 @app.post('/api/admin/transactions/{txid}/restore')
 def restore_draft(request:Request,txid:str):

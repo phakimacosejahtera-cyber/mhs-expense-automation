@@ -845,7 +845,7 @@ async function managementPage(){
  setHead('Management','Kelola aktivitas dan kategori pengeluaran');
  const cfg=await json('/config');if(state.page!=='management')return;state.config=cfg;
  const a=cfg.activities,c=cfg.categories;
- $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas (${a.length})</h3><p class="tiny muted">Periode ditutup tetap menerima kuitansi dengan alasan keterlambatan dan review.</p><div class="field"><input id="activity-query" aria-label="Cari aktivitas" placeholder="Cari aktivitas..."></div><div id="activity-list" class="mt"></div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" maxlength="100" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori (${c.length})</h3><div class="field mt"><input id="category-query" aria-label="Cari kategori" placeholder="Cari kategori..."></div><div id="category-list" class="mt"></div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" maxlength="80" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div><section class="panel panelpad mt"><h3>Pengaturan lanjutan</h3><p class="muted">Kalender hari kerja dan SLA pemulihan transaksi.</p><button class="btn outline" data-nav="calendar">Calendar &amp; SLA</button><div id="backup-panel" class="mt"></div><div id="storage-panel" class="mt"></div><div class="mt"><h3>Pembersihan draft</h3><p>Draft yang dihapus dapat dipulihkan selama 30 hari.</p><button class="btn danger" id="delete-all-drafts">Hapus semua draft</button><h3 class="mt">Draft terhapus</h3><div id="deleted-drafts" aria-live="polite"></div></div></section>`;
+ $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas (${a.length})</h3><p class="tiny muted">Periode ditutup tetap menerima kuitansi dengan alasan keterlambatan dan review.</p><div class="field"><input id="activity-query" aria-label="Cari aktivitas" placeholder="Cari aktivitas..."></div><div id="activity-list" class="mt"></div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" maxlength="100" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori (${c.length})</h3><div class="field mt"><input id="category-query" aria-label="Cari kategori" placeholder="Cari kategori..."></div><div id="category-list" class="mt"></div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" maxlength="80" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div><section class="panel panelpad mt"><h3>Pengaturan lanjutan</h3><p class="muted">Kalender hari kerja dan SLA pemulihan transaksi.</p><button class="btn outline" data-nav="calendar">Calendar &amp; SLA</button><div id="backup-panel" class="mt"></div><div id="storage-panel" class="mt"></div><div class="mt"><h3>Pembersihan draft</h3><p>Draft yang dihapus dapat dipulihkan selama 30 hari.</p><button class="btn danger" id="delete-all-drafts">Hapus semua draft</button><h3 class="mt">Draft terhapus</h3><button type="button" class="btn danger" id="empty-trash" hidden style="display:none">Kosongkan Draft Terhapus</button><div id="deleted-drafts" aria-live="polite"></div></div></section>`;
  const deleted=$('#deleted-drafts');
  async function refreshDeleted(){
    try{
@@ -888,6 +888,20 @@ async function managementPage(){
    }catch(err){toast(err.message,true)}finally{cleanup.disabled=false}
  };
  if((await json("/health")).mode==="DEMO LOCAL"&&state.page==="management"){
+   const emptyTrash=$('#empty-trash');
+   emptyTrash.hidden=false;emptyTrash.style.display='';
+   emptyTrash.onclick=async()=>{
+     emptyTrash.disabled=true;
+     try{
+       const preview=await json('/admin/drafts/empty-trash');
+       if(!emptyTrash.isConnected)return;
+       if(!preview.count)return toast('Draft terhapus sudah kosong.');
+       if(!confirm('Hapus permanen seluruh '+preview.count+' draft terhapus beserta file kuitansinya dari penyimpanan lokal? Semua draft ini tidak dapat dipulihkan dari aplikasi.'))return;
+       const result=await post('/admin/drafts/empty-trash',{token:preview.token});
+       toast(result.count+' draft dihapus permanen.'+(result.pending?' Sebagian file akan dibersihkan saat aplikasi dibuka kembali.':''));
+       document.querySelector('#storage-check')?.click();
+     }catch(err){toast(err.message,true)}finally{emptyTrash.disabled=false;if(emptyTrash.isConnected)await refreshDeleted()}
+   };
    await setupBackupPanel();
    if(state.page==="management")setupStoragePanel();
  }
