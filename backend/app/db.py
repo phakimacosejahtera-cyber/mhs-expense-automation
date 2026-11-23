@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS transactions(
  batch_id TEXT NOT NULL REFERENCES upload_batches(id),uploader_id TEXT NOT NULL REFERENCES users(id),
  activity_id TEXT NOT NULL REFERENCES activities(id),category_id TEXT REFERENCES categories(id),
  transaction_date TEXT,amount_cents INTEGER CHECK(amount_cents IS NULL OR amount_cents>=0),
- currency TEXT NOT NULL DEFAULT 'IDR',description TEXT,vendor TEXT,payment_method TEXT,invoice_number TEXT,notes TEXT,
+ currency TEXT NOT NULL DEFAULT 'IDR',description TEXT,vendor TEXT,payment_method TEXT,invoice_number TEXT,contract_name TEXT,contract_number TEXT,notes TEXT,
  status TEXT NOT NULL DEFAULT 'DRAFT' CHECK(status IN ('DRAFT','SUBMITTED','PENDING_REVIEW','APPROVED','REJECTED','REVERSED')),
  revision INTEGER NOT NULL DEFAULT 1,risk_reasons TEXT NOT NULL DEFAULT '[]',is_late INTEGER NOT NULL DEFAULT 0,
  late_reason TEXT,approved_at TEXT,approved_by TEXT REFERENCES users(id),

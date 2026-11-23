@@ -21,6 +21,12 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS income_entries(
 def initialize():
     with tx() as c:
         c.execute(SCHEMA)
+        for table in ("transactions", "income_entries"):
+            existing = {row["name"] for row in c.execute(f"PRAGMA table_info({table})")}
+            for column in ("contract_name", "contract_number"):
+                if column not in existing:
+                    default = " NOT NULL DEFAULT ''" if table == "income_entries" else ""
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT{default}")
         c.execute("CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_income_date ON income_entries(transaction_date)")
         for category in ("Peralatan Kantor / IT", "Honorarium / Insentif"):
@@ -43,6 +49,8 @@ class IncomeIn(BaseModel):
     transaction_date: str = Field(min_length=10, max_length=10)
     amount_cents: int = Field(strict=True, gt=0, le=99999999999900)
     description: str = Field(min_length=1, max_length=500)
+    contract_name: str = Field(default="", max_length=300)
+    contract_number: str = Field(default="", max_length=120)
     sender: str = Field(default="", max_length=200)
 
 class ReverseIn(BaseModel):
@@ -63,16 +71,16 @@ def create_income(request: Request, data: IncomeIn):
     if not desc:
         raise HTTPException(422, "Keterangan wajib diisi")
     entry_id = str(data.request_id)
-    values = (day.isoformat(), data.amount_cents, desc, sender)
+    values = (day.isoformat(), data.amount_cents, desc, sender, data.contract_name.strip(), data.contract_number.strip())
     with tx() as c:
         previous = one(c, "SELECT * FROM income_entries WHERE id=?", (entry_id,))
         if previous:
-            existing = tuple(previous[k] for k in ("transaction_date", "amount_cents", "description", "sender"))
+            existing = tuple(previous[k] for k in ("transaction_date", "amount_cents", "description", "sender", "contract_name", "contract_number"))
             if previous["created_by"] != u["id"] or existing != values:
                 raise HTTPException(409, "ID pencatatan sudah digunakan")
             return {"id": entry_id, "replayed": True}
-        c.execute("""INSERT INTO income_entries(id,transaction_date,amount_cents,description,sender,created_by,created_at)
-                     VALUES (?,?,?,?,?,?,?)""", (entry_id, *values, u["id"], now()))
+        c.execute("""INSERT INTO income_entries(id,transaction_date,amount_cents,description,sender,contract_name,contract_number,created_by,created_at)
+                     VALUES (?,?,?,?,?,?,?,?,?)""", (entry_id, *values, u["id"], now()))
         audit(c, u["id"], "INCOME_RECORDED", "income", entry_id,
               {"transaction_date": values[0], "amount_cents": data.amount_cents})
     return {"id": entry_id, "replayed": False}
@@ -114,9 +122,9 @@ def period_snapshot(year=None, month=None):
     # One isolated SQLite transaction provides a consistent snapshot.
     with tx() as c:
         expenses = allrows(c, """SELECT id,transaction_date,amount_cents,description,vendor,category_id,
-             document_id,activity_id,payment_method,invoice_number,notes
+             document_id,activity_id,payment_method,invoice_number,contract_name,contract_number,notes
              FROM transactions WHERE """+where+" ORDER BY transaction_date,id", params)
-        incomes = allrows(c, """SELECT id,transaction_date,amount_cents,description,sender,reversed_at,reversal_reason
+        incomes = allrows(c, """SELECT id,transaction_date,amount_cents,description,sender,contract_name,contract_number,reversed_at,reversal_reason
              FROM income_entries WHERE transaction_date>=? AND transaction_date<?
              ORDER BY transaction_date DESC,created_at DESC,id""", params)
         date_rows = allrows(c, """SELECT DISTINCT transaction_date FROM transactions

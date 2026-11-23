@@ -541,6 +541,8 @@ def read_browser_ocr(request:Request,txid:str):
 class DraftData(BaseModel):
     transaction_date:str|None=None;amount:str|int|float|None=None;description:str|None=None
     category_id:str|None=None;vendor:str|None=None;payment_method:str|None=None
+    contract_name: str | None = Field(default=None, max_length=300)
+    contract_number: str | None = Field(default=None, max_length=120)
     invoice_number:str|None=None;notes:str|None=None;mixed_receipt:bool=False
 
 @app.patch('/api/transactions/{txid}/draft')
@@ -560,8 +562,8 @@ def edit_draft(request:Request,txid:str,data:DraftData):
             raise HTTPException(422,'Kategori tidak dikenal')
         fields=(data.transaction_date,cents,(data.description or '')[:500],data.category_id,
                 (data.vendor or '')[:200],(data.payment_method or '')[:100],(data.invoice_number or '')[:100],
-                (data.notes or '')[:2000],txid)
-        c.execute('''UPDATE transactions SET transaction_date=?,amount_cents=?,description=?,category_id=?,vendor=?,payment_method=?,invoice_number=?,notes=?,revision=revision+1,updated_at=? WHERE id=?''',
+                (data.notes or '')[:2000],data.contract_name,data.contract_number,txid)
+        c.execute('''UPDATE transactions SET transaction_date=?,amount_cents=?,description=?,category_id=?,vendor=?,payment_method=?,invoice_number=?,notes=?,contract_name=COALESCE(?,contract_name),contract_number=COALESCE(?,contract_number),revision=revision+1,updated_at=? WHERE id=?''',
                   fields[:-1]+(now(),fields[-1]))
         old=json.loads(t['risk_reasons'])
         old=[x for x in old if 'duplikat' in x.lower()]
@@ -910,16 +912,16 @@ def export_report(request:Request,activity_id:str|None=None):
     sql+=' ORDER BY t.transaction_date,t.id'
     with connection() as c:rows=allrows(c,sql,args)
     wb=Workbook();ws=wb.active;ws.title='Transactions'
-    heads=['Date','Amount (IDR)','Description','Vendor','Category','Payment Method','Invoice Number','Uploader','Receipt Link','Notes','Transaction ID','Activity']
+    heads=['Date','Amount (IDR)','Description','Vendor','Category','Payment Method','Invoice Number','Uploader','Receipt Link','Notes','Transaction ID','Activity','Nama Kontrak','Nomor Kontrak']
     ws.append(heads)
     base=PUBLIC_ORIGIN or 'http://127.0.0.1:8000'
     for r in rows:
         ws.append([safe_excel(r['transaction_date']),r['amount_cents']/100,safe_excel(r['description']),safe_excel(r['vendor']),
                    safe_excel(r['category_name']),safe_excel(r['payment_method']),safe_excel(r['invoice_number']),
-                   safe_excel(r['uploader_name']),base+'/api/receipts/'+r['document_id'],safe_excel(r['notes']),r['id'],safe_excel(r['activity_name'])])
+                   safe_excel(r['uploader_name']),base+'/api/receipts/'+r['document_id'],safe_excel(r['notes']),r['id'],safe_excel(r['activity_name']),safe_excel(r['contract_name']),safe_excel(r['contract_number'])])
     for cell in ws[1]:cell.fill=PatternFill('solid',fgColor='171717');cell.font=Font(color='FFFFFF',bold=True)
     ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
-    for col,w in {'A':15,'B':18,'C':42,'D':22,'E':24,'F':20,'G':22,'H':24,'I':55,'J':28,'K':42,'L':30}.items():ws.column_dimensions[col].width=w
+    for col,w in {'A':15,'B':18,'C':42,'D':22,'E':24,'F':20,'G':22,'H':24,'I':55,'J':28,'K':42,'L':30,'M':40,'N':28}.items():ws.column_dimensions[col].width=w
     for cell in ws['B'][1:]:cell.number_format='#,##0.00'
     sums=wb.create_sheet('Summary');sums.append(['Metric','Value']);sums.append(['Approved receipts',len(rows)]);sums.append(['Approved total (IDR)',sum(x['amount_cents'] for x in rows)/100])
     info=wb.create_sheet('Report Info');info.append(['Company','PT Mulia Hakimaco Sejahtera']);info.append(['Snapshot UTC',now()]);info.append(['Scope','all admin data' if u['role']=='admin' else 'own approved data']);info.append(['Activity filter',activity_id or 'ALL']);info.append(['Rule','Only current APPROVED; historic exports immutable'])

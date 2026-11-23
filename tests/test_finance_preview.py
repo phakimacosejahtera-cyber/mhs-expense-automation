@@ -21,7 +21,7 @@ with TestClient(app) as c:
     def post(path,data):
         return c.post(path,json=data,headers=headers)
     def income(day,amount,desc):
-        p={'request_id':str(uuid4()),'transaction_date':day,'amount_cents':amount,'description':desc,'sender':'Fixture'}
+        p={'request_id':str(uuid4()),'transaction_date':day,'amount_cents':amount,'description':desc,'sender':'Fixture','contract_name':'Kontrak masuk','contract_number':'00018'}
         r=post('/api/finance/income',p); assert r.status_code==200,r.text
         assert post('/api/finance/income',p).json()['replayed']
         return p['request_id']
@@ -38,7 +38,7 @@ with TestClient(app) as c:
         r=c.post('/api/batches/'+batch+'/documents',files={'file':('fixture.pdf',b'%PDF-1.4\n'+tag.encode(),'application/pdf')},headers=headers)
         assert r.status_code==200,r.text
         tid=r.json()['transaction_id']
-        r=c.patch('/api/transactions/'+tid+'/draft',json={'transaction_date':day,'amount':amount,'description':tag,'category_id':cat},headers=headers)
+        r=c.patch('/api/transactions/'+tid+'/draft',json={'transaction_date':day,'amount':amount,'description':tag,'category_id':cat,'contract_name':'Kontrak keluar','contract_number':'00019'},headers=headers)
         assert r.status_code==200,r.text
         if status=='DRAFT': return
         assert post('/api/transactions/submit-batch',{'ids':[tid]}).status_code==200
@@ -68,6 +68,15 @@ with TestClient(app) as c:
     assert wb['Ringkasan']['B4'].value==50000
     assert wb['Ringkasan']['B5'].value==300000
     assert wb['Pemasukan']['B2'].data_type!='f'
+    for sheet, row, name, number in [
+        ('Pemasukan', 2, 'Kontrak masuk', '00018'),
+        ('Pengeluaran', 2, 'Kontrak keluar', '00019'),
+        ('Semua Transaksi', 2, 'Kontrak masuk', '00018'),
+        ('Semua Transaksi', 3, 'Kontrak keluar', '00019'),
+    ]:
+        cells = dict(zip((c.value for c in wb[sheet][1]), wb[sheet][row]))
+        assert cells['Nama Kontrak'].value == name
+        assert cells['Nomor Kontrak'].value == number
     assert wb['Pengeluaran']['I2'].hyperlink
     assert 'MHS_Pemasukan' in wb['Pemasukan'].tables
     assert 'MHS_Pengeluaran' in wb['Pengeluaran'].tables
@@ -80,7 +89,7 @@ with TestClient(app) as c:
     assert empty.status_code==200,empty.text
     empty_wb=load_workbook(BytesIO(empty.content))
     assert empty_wb['Ringkasan']['B3'].value==0
-    assert empty_wb['Pemasukan'].tables['MHS_Pemasukan'].ref=='A1:E2'
+    assert empty_wb['Pemasukan'].tables['MHS_Pemasukan'].ref=='A1:G2'
     assert empty_wb['Ringkasan']['A13'].value=='Februari'
     overall=c.get('/api/finance/summary?year=0').json()
     assert overall['income_cents']==45000000 and overall['total_cents']==5012300,overall

@@ -220,7 +220,7 @@ async function dashboard(){
  </div>
 
  ${finance?`<section class="dash-card mt"><div class="chart-header"><div><h3>Riwayat Pemasukan</h3><small>Catatan dana masuk pada periode pilihan</small></div></div>
- ${d.incomes.length?`<div class="tablescroll"><table class="data-table"><thead><tr><th>Tanggal</th><th>Keterangan</th><th>Pengirim</th><th>Nominal</th><th>Status</th><th>Aksi</th></tr></thead><tbody>${d.incomes.map(i=>`<tr><td>${h(i.transaction_date)}</td><td>${h(i.description)}</td><td>${h(i.sender||'—')}</td><td>${fmtRp(i.amount_cents)}</td><td>${pill(i.reversed_at?'REVERSED':'APPROVED')}</td><td>${i.reversed_at?h(i.reversal_reason):`<button class="btn danger" data-income-reverse="${h(i.id)}">Batalkan</button>`}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Belum ada pemasukan pada periode ini.</div>'}</section>`:''}
+ ${d.incomes.length?`<div class="tablescroll"><table class="data-table"><thead><tr><th>Tanggal</th><th>Keterangan</th><th>Pengirim</th><th>Nama Kontrak</th><th>Nomor Kontrak</th><th>Nominal</th><th>Status</th><th>Aksi</th></tr></thead><tbody>${d.incomes.map(i=>`<tr><td>${h(i.transaction_date)}</td><td>${h(i.description)}</td><td>${h(i.sender||'—')}</td><td>${h(i.contract_name||'—')}</td><td>${h(i.contract_number||'—')}</td><td>${fmtRp(i.amount_cents)}</td><td>${pill(i.reversed_at?'REVERSED':'APPROVED')}</td><td>${i.reversed_at?h(i.reversal_reason):`<button class="btn danger" data-income-reverse="${h(i.id)}">Batalkan</button>`}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Belum ada pemasukan pada periode ini.</div>'}</section>`:''}
  <section class="dash-card mt">
    <div class="chart-header" style="margin-bottom:10px">
      <div>
@@ -255,8 +255,8 @@ async function dashboard(){
    if(finance){
      const requestId=crypto.randomUUID();
      const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jakarta',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
-     modal('Catat Pemasukan',`<form id="income-form" class="grid2">${field('Tanggal','transaction_date',today,'date',true)}${field('Nominal (rupiah, tanpa pemisah)','amount','','number',true,'min="1" max="999999999999" step="1"')}${field('Keterangan','description','','text',true,'maxlength="500"')}${field('Transfer dari / pengirim','sender','','text',false,'maxlength="200"')}<div><button class="btn primary" type="submit">Simpan Pemasukan</button></div></form><p class="tiny muted">Catat dana yang benar-benar diterima. Gunakan data simulasi saja.</p>`);
-     $('#income-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;const data=Object.fromEntries(new FormData(form));const amt=Number(data.amount);if(!Number.isSafeInteger(amt)||amt<=0||amt>999999999999)return toast('Nominal tidak valid',true);const btn=form.querySelector('button');btn.disabled=true;try{await post('/finance/income',{request_id:requestId,transaction_date:data.transaction_date,amount_cents:amt*100,description:data.description,sender:data.sender});closeModal();toast('Pemasukan tercatat');financeYear=0;financeMonth=0;await nav('dashboard')}catch(err){toast(err.message,true);btn.disabled=false}};
+     modal('Catat Pemasukan',`<form id="income-form" class="grid2">${field('Tanggal','transaction_date',today,'date',true)}${field('Nominal (rupiah, tanpa pemisah)','amount','','number',true,'min="1" max="999999999999" step="1"')}${field('Keterangan','description','','text',true,'maxlength="500"')}${field('Transfer dari / pengirim','sender','','text',false,'maxlength="200"')}${field('Nama Kontrak','contract_name','','text',false,'maxlength="300"')}${field('Nomor Kontrak','contract_number','','text',false,'maxlength="120"')}<div><button class="btn primary" type="submit">Simpan Pemasukan</button></div></form><p class="tiny muted">Catat dana yang benar-benar diterima. Gunakan data simulasi saja.</p>`);
+     $('#income-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;const data=Object.fromEntries(new FormData(form));const amt=Number(data.amount);if(!Number.isSafeInteger(amt)||amt<=0||amt>999999999999)return toast('Nominal tidak valid',true);const btn=form.querySelector('button');btn.disabled=true;try{await post('/finance/income',{request_id:requestId,transaction_date:data.transaction_date,amount_cents:amt*100,description:data.description,sender:data.sender,contract_name:data.contract_name,contract_number:data.contract_number});closeModal();toast('Pemasukan tercatat');financeYear=0;financeMonth=0;await nav('dashboard')}catch(err){toast(err.message,true);btn.disabled=false}};
      return;
    }
    const raw=prompt('Masukkan total pemasukan / anggaran kas (IDR), contoh: 100000000', String((d.income_cents||0)/100));
@@ -516,7 +516,7 @@ function renderOCREvidence(result){
   const dateRows=dates.map(x=>`<button type="button" class="btn soft" data-ocr-date="${h(x)}">Pakai ${h(x)}</button>`).join(' ');
   const context=Array.isArray(result.date_context)?result.date_context:[];
   const fields=result.field_candidates||{};
-  const fieldNames={vendor:'Vendor',description:'Keterangan',payment_method:'Metode pembayaran',invoice_number:'Nomor invoice / dokumen'};
+  const fieldNames={vendor:'Vendor',description:'Keterangan',payment_method:'Metode pembayaran',invoice_number:'Nomor invoice / dokumen',contract_name:'Nama Kontrak',contract_number:'Nomor Kontrak'};
   const fieldRows=Object.entries(fieldNames).map(([key,label])=>{
     const values=Array.isArray(fields[key])?fields[key].filter(x=>typeof x==='string').slice(0,3):[];
     return values.length?`<div class="ocr-field-group"><b class="tiny">${label}</b>${values.map(v=>`<div class="ocr-evidence-row"><small>${h(v)}</small><button type="button" class="btn soft" data-ocr-field="${key}" data-ocr-value="${h(v)}">Pakai</button></div>`).join('')}</div>`:'';
@@ -542,6 +542,10 @@ async function editDraft(id){
   let result=state.ocrResults.get(id);
   try{result=await json('/transactions/'+id+'/ocr-result');state.ocrResults.set(id,result)}
   catch(err){if(!result)result=null}
+  function contractValue(key) {
+    const candidates=result?.field_candidates?.[key];
+    return t[key] ?? (candidates?.length===1 ? candidates[0] : '');
+  }
   const ocrPanel=`<div class="notice" style="grid-column:1/-1"><b>Saran OCR — BELUM DIVERIFIKASI</b><div id="ocr-evidence">${renderOCREvidence(result)}</div><div class="mt row wrap"><button type="button" class="btn outline" id="retry-ocr">Baca ulang dokumen (mendalam)</button><span class="tiny" id="retry-ocr-status" role="status"></span></div></div>`;
   let existingRisks=[];try{existingRisks=JSON.parse(t.risk_reasons||'[]')}catch{}
   const mixed=existingRisks.some(x=>/beberapa kategori/i.test(x));
@@ -554,6 +558,7 @@ async function editDraft(id){
       ${field('Vendor','vendor',t.vendor||'')}
       ${field('Keterangan*','description',t.description||'','text',true)}
       ${field('Metode Pembayaran','payment_method',t.payment_method||'')}
+      ${field('Nama Kontrak','contract_name',contractValue('contract_name'),'text',false,'maxlength="300"')}${field('Nomor Kontrak','contract_number',contractValue('contract_number'),'text',false,'maxlength="120"')}
       ${field('Nomor Invoice','invoice_number',t.invoice_number||'')}
       <div class="field"><label>Catatan</label><textarea name="notes">${h(t.notes||'')}</textarea></div>
       <label class="checkrow" style="grid-column:1/-1"><input type="checkbox" name="mixed_receipt" ${mixed?'checked':''}>Kuitansi ini mencakup beberapa kategori</label>
@@ -562,15 +567,20 @@ async function editDraft(id){
   modal('Periksa & Lengkapi Kuitansi',body,'<button class="btn outline" id="modal-done">Tutup</button>');
   $('#modal-done').onclick=closeModal;
   const draftForm=$('#draft-form');
+  const editedFields=new Set();
+  draftForm.addEventListener('input', event=>editedFields.add(event.target.name));
   draftForm.addEventListener('click',ev=>{
     const amount=ev.target.closest('[data-ocr-amount]');
     if(amount){draftForm.elements.amount.value=amount.dataset.ocrAmount;return}
     const date=ev.target.closest('[data-ocr-date]');
     if(date){draftForm.elements.transaction_date.value=date.dataset.ocrDate;return}
     const fieldBtn=ev.target.closest('[data-ocr-field]');
-    if(fieldBtn && ['vendor','description','payment_method','invoice_number','category_id'].includes(fieldBtn.dataset.ocrField)){
+    if(fieldBtn && ['vendor','description','payment_method','invoice_number','contract_name','contract_number','category_id'].includes(fieldBtn.dataset.ocrField)){
       const field=draftForm.elements.namedItem(fieldBtn.dataset.ocrField);
-      if(field)field.value=fieldBtn.dataset.ocrValue;
+      if(field){
+        field.value=fieldBtn.dataset.ocrValue;
+        editedFields.add(field.name);
+      }
     }
   });
   $('#retry-ocr').onclick=async()=>{
@@ -592,7 +602,15 @@ async function editDraft(id){
       const enriched=await saveHybridOCR(id,result,report);
       state.ocrResults.set(id,enriched);
       state.ocrStatus.set(id,'OCR dibaca ulang; belum diverifikasi');
-      if(draftForm.isConnected){draftForm.querySelector('#ocr-evidence').innerHTML=renderOCREvidence(enriched);status.textContent=(enriched.paddle_status==='EXTRACTED'?'PaddleOCR selesai. ':'PaddleOCR '+(enriched.paddle_error||enriched.paddle_status)+'. ')+'Isian formulir tetap dipertahankan.'}
+      if(draftForm.isConnected){
+        for(const key of ['contract_name','contract_number']){
+          const candidates=enriched.field_candidates?.[key];
+          const input=draftForm.elements.namedItem(key);
+          if(t[key]==null && !input.value && !editedFields.has(key) && candidates?.length===1){
+            input.value=candidates[0];
+          }
+        }
+        draftForm.querySelector('#ocr-evidence').innerHTML=renderOCREvidence(enriched);status.textContent=(enriched.paddle_status==='EXTRACTED'?'PaddleOCR selesai. ':'PaddleOCR '+(enriched.paddle_error||enriched.paddle_status)+'. ')+'Periksa hasil pembacaan sebelum menyimpan.'}
     }catch(err){status.textContent=err.message;toast(err.message,true)}
     finally{if(engine)try{await engine.close()}catch{}ocrBusy=false;btn.disabled=false}
   };
@@ -653,7 +671,7 @@ async function transactionsPage(){
   filter();
 }
 async function details(id){let t=state.transactions.find(t=>t.id===id)|| (await loadTx()).find(t=>t.id===id);if(!t)return;
- let data=await json('/transactions/'+id+'/history');modal('Detail Transaksi',`<div class="grid2"><div><h3>${h(t.description||'Transaksi')}</h3><table class="small-table"><tr><td>Status</td><td>${pill(t.status)}</td></tr><tr><td>Nominal</td><td><b>${rp(t.amount_cents)}</b></td></tr><tr><td>Tanggal</td><td>${h(t.transaction_date)}</td></tr><tr><td>Aktivitas</td><td>${h(t.activity_name)}</td></tr><tr><td>Uploader</td><td>${h(t.uploader_name)}</td></tr><tr><td>Kategori</td><td>${h(t.category_name)}</td></tr><tr><td>Vendor</td><td>${h(t.vendor||'—')}</td></tr><tr><td>Metode pembayaran</td><td>${h(t.payment_method||'—')}</td></tr><tr><td>Invoice</td><td>${h(t.invoice_number||'—')}</td></tr><tr><td>Catatan</td><td>${h(t.notes||'—')}</td></tr></table><p class="tiny muted">${t.status==='APPROVED'?'Termasuk pengeluaran laporan terbaru sesuai periode.':'Tidak termasuk pengeluaran APPROVED.'}</p>${t.rejected_reason?`<p class="notice">Alasan penolakan: ${h(t.rejected_reason)}</p>`:''}<a target="_blank" href="/api/receipts/${t.document_id}">Buka kuitansi aktif ↗</a><h4>Versi dokumen</h4>${data.versions.map(v=>`<div class="tiny"><a target="_blank" href="/api/receipts/${t.document_id}?version=${v.version_number}">Versi ${v.version_number}: ${h(v.filename)}</a></div>`).join('')}</div><div><h3>Audit Trail</h3>${data.audit.length?data.audit.map(a=>`<div class="hint mb"><b>${h(a.action)}</b><div class="tiny muted">${short(a.created_at)}</div>${a.details?`<details class="tiny"><summary>Detail kejadian</summary><div style="overflow-wrap:anywhere;white-space:pre-wrap">${h(a.details)}</div></details>`:''}</div>`).join(''):'<p class="muted">Belum ada histori.</p>'}</div></div>`,'<button class="btn outline" id="modal-done">Tutup</button>');$('#modal-done').onclick=closeModal;
+ let data=await json('/transactions/'+id+'/history');modal('Detail Transaksi',`<div class="grid2"><div><h3>${h(t.description||'Transaksi')}</h3><table class="small-table"><tr><td>Status</td><td>${pill(t.status)}</td></tr><tr><td>Nominal</td><td><b>${rp(t.amount_cents)}</b></td></tr><tr><td>Tanggal</td><td>${h(t.transaction_date)}</td></tr><tr><td>Aktivitas</td><td>${h(t.activity_name)}</td></tr><tr><td>Uploader</td><td>${h(t.uploader_name)}</td></tr><tr><td>Kategori</td><td>${h(t.category_name)}</td></tr><tr><td>Vendor</td><td>${h(t.vendor||'—')}</td></tr><tr><td>Metode pembayaran</td><td>${h(t.payment_method||'—')}</td></tr><tr><td>Nama Kontrak</td><td>${h(t.contract_name||'—')}</td></tr><tr><td>Nomor Kontrak</td><td>${h(t.contract_number||'—')}</td></tr><tr><td>Invoice</td><td>${h(t.invoice_number||'—')}</td></tr><tr><td>Catatan</td><td>${h(t.notes||'—')}</td></tr></table><p class="tiny muted">${t.status==='APPROVED'?'Termasuk pengeluaran laporan terbaru sesuai periode.':'Tidak termasuk pengeluaran APPROVED.'}</p>${t.rejected_reason?`<p class="notice">Alasan penolakan: ${h(t.rejected_reason)}</p>`:''}<a target="_blank" href="/api/receipts/${t.document_id}">Buka kuitansi aktif ↗</a><h4>Versi dokumen</h4>${data.versions.map(v=>`<div class="tiny"><a target="_blank" href="/api/receipts/${t.document_id}?version=${v.version_number}">Versi ${v.version_number}: ${h(v.filename)}</a></div>`).join('')}</div><div><h3>Audit Trail</h3>${data.audit.length?data.audit.map(a=>`<div class="hint mb"><b>${h(a.action)}</b><div class="tiny muted">${short(a.created_at)}</div>${a.details?`<details class="tiny"><summary>Detail kejadian</summary><div style="overflow-wrap:anywhere;white-space:pre-wrap">${h(a.details)}</div></details>`:''}</div>`).join(''):'<p class="muted">Belum ada histori.</p>'}</div></div>`,'<button class="btn outline" id="modal-done">Tutup</button>');$('#modal-done').onclick=closeModal;
 }
 async function correctionForm(id){let t=state.transactions.find(x=>x.id===id);if(!t)return;
  modal('Ajukan Koreksi',`<div class="notice">Data resmi tidak berubah selama koreksi menunggu persetujuan admin.</div><div class="hint mt"><b>Data saat ini</b><p class="tiny">${h(t.transaction_date||'—')} · ${rp(t.amount_cents)} · ${h(t.category_name||'—')}</p><p>${h(t.description||'—')}</p><p class="tiny">Vendor: ${h(t.vendor||'—')} · Invoice: ${h(t.invoice_number||'—')}</p></div><form id="correction-form" class="mt"><div class="field"><label>Alasan koreksi*</label><textarea name="reason" required minlength="5" placeholder="Jelaskan alasan perubahan"></textarea></div><div class="grid2 mt">${field('Nominal baru (kosong = tidak diubah)','amount','','number',false,'min="0" step="0.01"')}${field('Keterangan baru','description','')}${field('Tanggal baru','transaction_date','','date')}${selectF('Kategori baru','category_id',state.config.categories,null)}${field('Vendor baru','vendor','')}${field('Metode pembayaran baru','payment_method','')}${field('Nomor invoice baru','invoice_number','')}${field('Catatan baru','notes','')}</div><div class="field mt"><label>File kuitansi pengganti (opsional)</label><input type="file" name="replacement" accept=".pdf,.png,.jpg,.jpeg,.webp"></div><button type="submit" class="btn primary mt">Kirim Permintaan Koreksi</button></form>`);

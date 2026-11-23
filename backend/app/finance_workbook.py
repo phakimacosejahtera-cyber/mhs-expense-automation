@@ -105,14 +105,14 @@ def build_workbook(data, expenses, base, snapshot_at):
     for row in (3,4,5,8):
         ws[f"B{row}"].number_format = MONEY
         ws[f"B{row}"].font = Font(name="Calibri",size=12,bold=True,color=INK)
-    inc_rows = [[date.fromisoformat(i["transaction_date"]), safe(i["description"]), i["amount_cents"]/100, safe(i["sender"]), safe(i["id"])] for i in incomes]
-    exp_rows = [[date.fromisoformat(e["transaction_date"]), safe(e["description"]), (e["amount_cents"] or 0)/100, safe(e["vendor"]), safe(e["category_name"]), safe(e["activity_name"]), safe(e["payment_method"]), safe(e["invoice_number"]), base+"/api/receipts/"+e["document_id"], safe(e["notes"]), safe(e["id"])] for e in expenses]
-    combined = [[r[0],r[1],"Pemasukan",r[2],0,r[3],"",r[4]] for r in inc_rows] + [[r[0],r[1],"Pengeluaran",0,r[2],"",r[3],r[10]] for r in exp_rows]
-    combined.sort(key=lambda r:(r[0],r[-1]))
-    table(wb.create_sheet("Semua Transaksi"),["Tanggal","Keterangan","Jenis","Pemasukan","Pengeluaran","Pengirim","Vendor","ID"],combined,[24,42,18,22,22,28,28,40],money=(4,5),dates=(1,),table_name="MHS_Transaksi")
-    table(wb.create_sheet("Pemasukan"),["Tanggal","Keterangan","Nominal","Pengirim","ID"],inc_rows,[24,42,22,30,40],money=(3,),dates=(1,),table_name="MHS_Pemasukan")
+    inc_rows = [[date.fromisoformat(i["transaction_date"]), safe(i["description"]), i["amount_cents"]/100, safe(i["sender"]), safe(i["id"]), safe(i["contract_name"]), safe(i["contract_number"])] for i in incomes]
+    exp_rows = [[date.fromisoformat(e["transaction_date"]), safe(e["description"]), (e["amount_cents"] or 0)/100, safe(e["vendor"]), safe(e["category_name"]), safe(e["activity_name"]), safe(e["payment_method"]), safe(e["invoice_number"]), base+"/api/receipts/"+e["document_id"], safe(e["notes"]), safe(e["id"]), safe(e["contract_name"]), safe(e["contract_number"])] for e in expenses]
+    combined = [[r[0],r[1],"Pemasukan",r[2],0,r[3],"",r[4],*r[-2:]] for r in inc_rows] + [[r[0],r[1],"Pengeluaran",0,r[2],"",r[3],r[10],*r[-2:]] for r in exp_rows]
+    combined.sort(key=lambda r:(r[0],r[7]))
+    table(wb.create_sheet("Semua Transaksi"),["Tanggal","Keterangan","Jenis","Pemasukan","Pengeluaran","Pengirim","Vendor","ID","Nama Kontrak","Nomor Kontrak"],combined,[24,42,18,22,22,28,28,40,40,28],money=(4,5),dates=(1,),table_name="MHS_Transaksi")
+    table(wb.create_sheet("Pemasukan"),["Tanggal","Keterangan","Nominal","Pengirim","ID","Nama Kontrak","Nomor Kontrak"],inc_rows,[24,42,22,30,40,40,28],money=(3,),dates=(1,),table_name="MHS_Pemasukan")
     ex = wb.create_sheet("Pengeluaran")
-    table(ex,["Tanggal","Keterangan","Nominal","Vendor","Kategori","Aktivitas","Metode bayar","Nomor invoice","Tautan kuitansi","Catatan","ID"],exp_rows,[16,42,22,28,25,30,22,24,60,32,40],money=(3,),dates=(1,),table_name="MHS_Pengeluaran")
+    table(ex,["Tanggal","Keterangan","Nominal","Vendor","Kategori","Aktivitas","Metode bayar","Nomor invoice","Tautan kuitansi","Catatan","ID","Nama Kontrak","Nomor Kontrak"],exp_rows,[16,42,22,28,25,30,22,24,60,32,40,40,28],money=(3,),dates=(1,),table_name="MHS_Pengeluaran")
     ex.column_dimensions["A"].width = 24
     for row in ex.iter_rows(min_row=2, max_row=max(2,len(exp_rows)+1), max_col=9):
         cell = row[8]

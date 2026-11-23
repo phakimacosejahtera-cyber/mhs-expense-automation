@@ -2,12 +2,14 @@
 import re
 
 FIELDS = {
+    "contract_name": r"(?:nama\s+kontrak|contract\s+(?:name|title))",
+    "contract_number": r"(?:(?:nomor|no\.?)\s*kontrak|contract\s+(?:number|no\.?))",
     "vendor": r"(?:nama\s+(?:toko|merchant|vendor|penjual)|merchant|vendor|penjual|toko)",
     "description": r"(?:keterangan|deskripsi|uraian|keperluan|untuk\s+pembayaran)",
     "payment_method": r"(?:metode\s+pembayaran|cara\s+bayar|payment\s+method)",
     "invoice_number": r"(?:nomor\s+(?:invoice|faktur|kuitansi|kwitansi|dokumen)|no\.?\s*(?:invoice|faktur|kuitansi|kwitansi|dokumen|dok\.?)|invoice\s*(?:no\.?|number)?)",
 }
-LIMITS = {"vendor": 200, "description": 500, "payment_method": 100, "invoice_number": 100}
+LIMITS = {"contract_name": 300, "contract_number": 120, "vendor": 200, "description": 500, "payment_method": 100, "invoice_number": 100}
 
 def field_candidates(text):
     """Return only explicit label/value evidence, preserve alternatives."""
