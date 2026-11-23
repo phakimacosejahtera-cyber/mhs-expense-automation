@@ -850,14 +850,24 @@ async function managementPage(){
  async function refreshDeleted(){
    try{
      const rows=await json('/admin/drafts/deleted');
-     deleted.innerHTML=rows.map(r=>`<div class="draft-item"><div class="details"><strong>${h(r.filename||r.description||r.id)}</strong><p>${h(r.uploader_name)} · Dapat dipulihkan hingga ${h(workflowTime(r.purge_at))} WIB</p></div><button class="btn outline" data-restore-draft="${h(r.id)}">Pulihkan</button></div>`).join('')||'<p class="muted">Tidak ada draft yang dapat dipulihkan.</p>';
+     deleted.innerHTML=rows.map(r=>`<div class="draft-item"><div class="details"><strong>${h(r.filename||r.description||r.id)}</strong><p>${h(r.uploader_name)} · Dapat dipulihkan hingga ${h(workflowTime(r.purge_at))} WIB</p></div><div class="inline-actions"><button class="btn outline" data-restore-draft="${h(r.id)}">Pulihkan</button>${r.can_purge?`<button class="btn danger" data-purge-draft="${h(r.id)}" data-name="${h(r.filename||r.id)}" data-deleted="${h(workflowTime(r.deleted_at))}">Hapus permanen</button>`:''}</div></div>`).join('')||'<p class="muted">Tidak ada draft yang dapat dipulihkan.</p>';
    }catch(err){deleted.textContent=err.message}
  }
  deleted.onclick=async event=>{
-   const btn=event.target.closest('[data-restore-draft]');
+   const btn=event.target.closest('[data-restore-draft],[data-purge-draft]');
    if(!btn||btn.disabled)return;
    btn.disabled=true;
    try{
+     if(btn.dataset.purgeDraft){
+       if(!confirm('Hapus permanen '+btn.dataset.name+' (dihapus '+btn.dataset.deleted+' WIB, ID '+btn.dataset.purgeDraft+')? File ini tidak bisa dipulihkan dari aplikasi.')){
+         btn.disabled=false;return;
+       }
+       const result=await json('/admin/drafts/'+encodeURIComponent(btn.dataset.purgeDraft)+'/permanent',{method:'DELETE'});
+       toast(result.files_removed?'Draft dihapus permanen.':'Draft dihapus. Pembersihan file akan dicoba lagi saat aplikasi dibuka.');
+       await refreshDeleted();
+       document.querySelector('#storage-check')?.click();
+       return;
+     }
      await post('/admin/transactions/'+encodeURIComponent(btn.dataset.restoreDraft)+'/restore',{});
      toast('Draft dipulihkan. Buka All Transactions untuk melihatnya.');
      await refreshDeleted();

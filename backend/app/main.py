@@ -71,6 +71,7 @@ def startup():
     init_schema()
     if APP_MODE == 'demo':
         finance_preview.initialize()
+        finish_local_draft_purges()
     if HOSTED_PREVIEW:
         CLOUD_STORAGE.check_preview_scope()
         # Reuse only the already initialized synthetic test data and its bound owner.
@@ -1084,12 +1085,58 @@ def delete_draft(request:Request,txid:str):
 def deleted_drafts(request: Request):
     admin_only(auth(request))
     with connection() as c:
-        return allrows(c, """SELECT t.id,t.description,t.purge_at,v.filename,u.name AS uploader_name
+        rows = allrows(c, """SELECT t.id,t.description,t.deleted_at,t.purge_at,v.filename,u.name AS uploader_name
             FROM transactions t JOIN users u ON u.id=t.uploader_id
             JOIN documents d ON d.id=t.document_id
             LEFT JOIN document_versions v ON v.id=d.active_version_id
             WHERE t.status='DRAFT' AND t.deleted_at IS NOT NULL AND t.purge_at>?
             ORDER BY t.deleted_at DESC,t.id""", (now(),))
+
+    return [dict(row, can_purge=APP_MODE == 'demo' and CLOUD_STORAGE is None) for row in rows]
+
+def finish_local_draft_purges(job_id=None):
+    with tx() as c:
+        sql = "SELECT id,payload FROM background_jobs WHERE kind='LOCAL_DRAFT_UNLINK'"
+        jobs = allrows(c, sql + (" AND id=?" if job_id else ""), (job_id,) if job_id else ())
+        for job in jobs:
+            for ref in json.loads(job['payload']):
+                path = Path(ref)
+                if path.parent.resolve() != (DATA/'private_docs').resolve():
+                    raise ValueError('Lokasi file tidak valid')
+                if not one(c, 'SELECT id FROM document_versions WHERE storage_path=? LIMIT 1', (ref,)):
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        break
+            else:
+                c.execute('DELETE FROM background_jobs WHERE id=?', (job['id'],))
+                continue
+            if job_id:
+                return False
+    return True
+
+@app.delete('/api/admin/drafts/{txid}/permanent')
+def purge_deleted_draft(request:Request, txid:str):
+    user=auth(request, True)
+    admin_only(user)
+    if APP_MODE != 'demo' or CLOUD_STORAGE is not None:
+        raise HTTPException(409,'Penghapusan file hanya tersedia pada penyimpanan lokal.')
+    with tx() as c:
+        draft=one(c,"SELECT document_id FROM transactions WHERE id=? AND status='DRAFT' AND deleted_at IS NOT NULL",(txid,))
+        if not draft:
+            raise HTTPException(409,'Draft sudah berubah. Muat ulang daftar.')
+        doc=draft['document_id']
+        refs=[v['storage_path'] for v in allrows(c,'SELECT storage_path FROM document_versions WHERE document_id=?',(doc,))]
+        if any(Path(ref).parent.resolve() != (DATA/'private_docs').resolve() for ref in refs):
+            raise HTTPException(409,'Lokasi file tidak sesuai dengan penyimpanan lokal.')
+        job=uid()
+        c.execute("INSERT INTO background_jobs(id,kind,status,payload,created_at,updated_at) VALUES (?,'LOCAL_DRAFT_UNLINK','PENDING',?,?,?)",(job,js(refs),now(),now()))
+        c.execute('DELETE FROM extraction_runs WHERE document_id=?',(doc,))
+        c.execute('DELETE FROM transactions WHERE id=?',(txid,))
+        c.execute('DELETE FROM document_versions WHERE document_id=?',(doc,))
+        c.execute('DELETE FROM documents WHERE id=?',(doc,))
+        audit(c,user['id'],'DRAFT_PURGED','transaction',txid,{})
+    return {'files_removed':finish_local_draft_purges(job)}
 
 @app.post('/api/admin/transactions/{txid}/restore')
 def restore_draft(request:Request,txid:str):
