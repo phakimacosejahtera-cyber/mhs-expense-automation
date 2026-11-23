@@ -845,7 +845,19 @@ async function managementPage(){
  setHead('Management','Kelola aktivitas dan kategori pengeluaran');
  const cfg=await json('/config');if(state.page!=='management')return;state.config=cfg;
  const a=cfg.activities,c=cfg.categories;
- $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas (${a.length})</h3><p class="tiny muted">Periode ditutup tetap menerima kuitansi dengan alasan keterlambatan dan review.</p><div class="field"><input id="activity-query" aria-label="Cari aktivitas" placeholder="Cari aktivitas..."></div><div id="activity-list" class="mt"></div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" maxlength="100" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori (${c.length})</h3><div class="field mt"><input id="category-query" aria-label="Cari kategori" placeholder="Cari kategori..."></div><div id="category-list" class="mt"></div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" maxlength="80" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div><details class="panel panelpad mt"><summary>Pengaturan lanjutan</summary><p class="muted">Kalender hari kerja dan SLA pemulihan transaksi.</p><button class="btn outline" data-nav="calendar">Calendar &amp; SLA</button><div id="backup-panel" class="mt"></div><div id="storage-panel" class="mt"></div></details>`;
+ $('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Aktivitas (${a.length})</h3><p class="tiny muted">Periode ditutup tetap menerima kuitansi dengan alasan keterlambatan dan review.</p><div class="field"><input id="activity-query" aria-label="Cari aktivitas" placeholder="Cari aktivitas..."></div><div id="activity-list" class="mt"></div><form id="act-form" class="mt"><div class="field"><label>Aktivitas baru</label><input name="name" minlength="3" maxlength="100" required></div><button class="btn primary mt">Tambah Aktivitas</button></form></section><section class="panel panelpad"><h3>Kategori (${c.length})</h3><div class="field mt"><input id="category-query" aria-label="Cari kategori" placeholder="Cari kategori..."></div><div id="category-list" class="mt"></div><form id="cat-form"><div class="field"><label>Kategori baru</label><input name="name" minlength="2" maxlength="80" required></div><button class="btn primary mt">Tambah Kategori</button></form></section></div><section class="panel panelpad mt"><h3>Pengaturan lanjutan</h3><p class="muted">Kalender hari kerja dan SLA pemulihan transaksi.</p><button class="btn outline" data-nav="calendar">Calendar &amp; SLA</button><div id="backup-panel" class="mt"></div><div id="storage-panel" class="mt"></div><div class="mt"><h3>Pembersihan draft</h3><p>Draft yang dihapus dapat dipulihkan selama 30 hari.</p><button class="btn danger" id="delete-all-drafts">Hapus semua draft</button></div></section>`;
+ const cleanup=$('#delete-all-drafts');
+ cleanup.onclick=async()=>{
+   cleanup.disabled=true;
+   try{
+     const preview=await json('/admin/drafts/cleanup');
+     if(!cleanup.isConnected)return;
+     if(!preview.count)return toast('Tidak ada draft aktif.');
+     if(!confirm('Hapus '+preview.count+' draft aktif dari semua pengunggah? Admin dapat memulihkannya selama 30 hari.'))return;
+     const result=await post('/admin/drafts/cleanup',{token:preview.token});
+     toast(result.count+' draft dihapus.');
+   }catch(err){toast(err.message,true)}finally{cleanup.disabled=false}
+ };
  if((await json("/health")).mode==="DEMO LOCAL"&&state.page==="management"){
    await setupBackupPanel();
    if(state.page==="management")setupStoragePanel();
@@ -937,7 +949,7 @@ function renderStorageOverview(d){
 
 function setupStoragePanel(){
  const panel=$('#storage-panel');if(!panel)return;
- panel.innerHTML='<h3>Penyimpanan Data</h3><p class="tiny muted">Periksa ukuran database, kuitansi, laporan dan cadangan. Tidak menghapus file.</p><button class="btn outline" id="storage-check">Periksa Penyimpanan</button><div id="storage-result" role="status" class="mt"></div>';
+ panel.innerHTML='<h3>Penyimpanan Data</h3><p class="tiny muted">Periksa ukuran database, kuitansi, laporan dan cadangan. Tidak menghapus file.</p><button class="btn outline" id="storage-check">Perbarui ringkasan</button><div id="storage-result" role="status" class="mt"></div>';
  const btn=panel.querySelector('#storage-check'),result=panel.querySelector('#storage-result');
  btn.onclick=async()=>{
    btn.disabled=true;result.textContent='Memeriksa penyimpanan…';
@@ -947,6 +959,7 @@ function setupStoragePanel(){
    }catch(err){if(panel.isConnected)result.textContent=err.message}
    finally{btn.disabled=false}
  };
+ btn.click();
 }
 function workflowTime(v){
   const d=new Date(v||'invalid');return Number.isNaN(d.getTime())?'—':d.toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'medium',timeZone:'Asia/Jakarta'});

@@ -1037,6 +1037,36 @@ def manual_escalate(request:Request,request_id:str,data:Escalation):
         if result=='BLOCKED':raise HTTPException(409,'Tidak ada admin cadangan eligible; permintaan tetap pending')
     return {'assignment_stage':'BACKUP','status':'PENDING'}
 
+def active_draft_snapshot(c):
+    rows = allrows(c, "SELECT id,revision FROM transactions WHERE status='DRAFT' AND deleted_at IS NULL ORDER BY id")
+    token = hashlib.sha256(js([[r['id'], r['revision']] for r in rows]).encode()).hexdigest()
+    return rows, token
+
+@app.get('/api/admin/drafts/cleanup')
+def preview_draft_cleanup(request: Request):
+    admin_only(auth(request))
+    with connection() as c:
+        rows, token = active_draft_snapshot(c)
+    return {'count': len(rows), 'token': token}
+
+class DraftCleanup(BaseModel):
+    token: str = Field(min_length=64, max_length=64)
+
+@app.post('/api/admin/drafts/cleanup')
+def bulk_delete_drafts(request: Request, data: DraftCleanup):
+    user = auth(request, True)
+    admin_only(user)
+    with tx() as c:
+        rows, token = active_draft_snapshot(c)
+        if token != data.token:
+            raise HTTPException(409, 'Daftar draft berubah. Periksa jumlahnya kembali.')
+        deleted_at = now()
+        expiry = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(timespec='seconds')
+        c.execute("UPDATE transactions SET deleted_at=?,purge_at=? WHERE status='DRAFT' AND deleted_at IS NULL", (deleted_at, expiry))
+        for row in rows:
+            audit(c, user['id'], 'DRAFT_SOFT_DELETED', 'transaction', row['id'], {'purge_at': expiry, 'bulk': True})
+    return {'count': len(rows)}
+
 @app.delete('/api/transactions/{txid}/draft')
 def delete_draft(request:Request,txid:str):
     u=auth(request,True)
