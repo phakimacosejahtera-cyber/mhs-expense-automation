@@ -642,7 +642,7 @@ async function editDraft(id){
 const txFilter={q:'',status:'ALL',activity:'',category:'',from:'',to:'',sort:'newest'};
 function filterTransactions(rows,f){
   const q=f.q.trim().toLowerCase();
-  const result=rows.filter(t=>(f.status==='ALL'||t.status===f.status)&&(!f.activity||t.activity_id===f.activity)&&(!f.category||t.category_id===f.category)&&(!f.from||(t.transaction_date&&t.transaction_date>=f.from))&&(!f.to||(t.transaction_date&&t.transaction_date<=f.to))&&(!q||[t.description,t.vendor,t.invoice_number,t.activity_name,t.category_name,t.uploader_name].some(v=>String(v??'').toLowerCase().includes(q))));
+  const result=rows.filter(t=>(f.status==='ALL'||t.status===f.status)&&(!f.activity||t.activity_id===f.activity)&&(!f.category||t.category_id===f.category)&&(!f.from||(t.transaction_date&&t.transaction_date>=f.from))&&(!f.to||(t.transaction_date&&t.transaction_date<=f.to))&&(!q||[t.description,t.vendor,t.invoice_number,t.contract_name,t.contract_number,t.activity_name,t.category_name,t.uploader_name].some(v=>String(v??'').toLowerCase().includes(q))));
   if(f.sort==='amount')result.sort((a,b)=>(b.amount_cents??-1)-(a.amount_cents??-1));
   if(f.sort==='date')result.sort((a,b)=>String(b.transaction_date||'').localeCompare(String(a.transaction_date||'')));
   return result;
@@ -651,7 +651,7 @@ async function transactionsPage(){
   setHead(state.me.role==='admin'?'All Transactions':'My Transactions','Cari, filter, dan periksa histori transaksi');
   const rows=await loadTx();if(state.page!=='transactions')return;
   $('#page-content').innerHTML=`<section class="panel panelpad">
-  <div class="grid2"><div class="field"><label>Cari transaksi</label><input id="tx-search" placeholder="Keterangan, vendor, invoice, aktivitas..." value="${h(txFilter.q)}"></div>
+  <div class="grid2"><div class="field"><label for="tx-search">Cari transaksi</label><input id="tx-search" placeholder="Keterangan, vendor, invoice, kontrak..." value="${h(txFilter.q)}"></div>
   <div class="field"><label>Status</label><select id="tx-status"><option value="ALL">Semua status</option>${['DRAFT','PENDING_REVIEW','APPROVED','REJECTED','REVERSED'].map(x=>'<option>'+x+'</option>').join('')}</select></div>
   <div class="field"><label>Aktivitas</label><select id="tx-activity">${opts(state.config.activities,txFilter.activity,'Semua aktivitas')}</select></div>
   <div class="field"><label>Kategori</label><select id="tx-category">${opts(state.config.categories,txFilter.category,'Semua kategori')}</select></div>
@@ -784,7 +784,7 @@ async function reviewAction(spec){
   const replacementExpected=kind==='correction'&&!!r.replacement_version_id;
   const replacementAvailable=replacementExpected&&t&&Number.isInteger(r.replacement_version_number)&&r.replacement_version_number>0;
   const replacementLink=replacementAvailable?`<p><a href="/api/receipts/${h(t.document_id)}?version=${r.replacement_version_number}" target="_blank" rel="noopener">Buka kuitansi pengganti (versi ${r.replacement_version_number}) ↗</a></p>`:replacementExpected?'<p class="notice">Versi kuitansi pengganti belum tersedia. Muat ulang Review Queue sebelum mengambil keputusan.</p>':'';
-  const context=t?`<table class="small-table"><tr><td>Status saat ini</td><td>${pill(t.status)}</td></tr><tr><td>Keterangan</td><td>${h(t.description||'—')}</td></tr><tr><td>Tanggal</td><td>${h(t.transaction_date||'—')}</td></tr><tr><td>Nominal</td><td><b>${rp(t.amount_cents)}</b></td></tr><tr><td>Vendor</td><td>${h(t.vendor||'—')}</td></tr><tr><td>Uploader</td><td>${h(t.uploader_name||'—')}</td></tr></table><p><a href="/api/receipts/${h(t.document_id)}" target="_blank" rel="noopener">Buka kuitansi aktif ↗</a></p>`:'<p class="notice">Ringkasan transaksi tidak tersedia. Buka kembali antrean untuk memeriksa data.</p>';
+  const context=t?`<table class="small-table"><tr><td>Status saat ini</td><td>${pill(t.status)}</td></tr><tr><td>Keterangan</td><td>${h(t.description||'—')}</td></tr><tr><td>Tanggal</td><td>${h(t.transaction_date||'—')}</td></tr><tr><td>Nominal</td><td><b>${rp(t.amount_cents)}</b></td></tr><tr><td>Vendor</td><td>${h(t.vendor||'—')}</td></tr><tr><td>Kategori</td><td>${h(t.category_name||'—')}</td></tr><tr><td>Nama Kontrak</td><td>${h(t.contract_name||'—')}</td></tr><tr><td>Nomor Kontrak</td><td>${h(t.contract_number||'—')}</td></tr><tr><td>Uploader</td><td>${h(t.uploader_name||'—')}</td></tr></table><p><a href="/api/receipts/${h(t.document_id)}" target="_blank" rel="noopener">Buka kuitansi aktif ↗</a></p>`:'<p class="notice">Ringkasan transaksi tidak tersedia. Buka kembali antrean untuk memeriksa data.</p>';
   const evidence=kind==='transaction'?`<h4>Alasan review</h4><ul>${reviewRisks(r.risk_reasons).map(x=>'<li>'+h(x)+'</li>').join('')||'<li>Perlu pemeriksaan admin.</li>'}</ul>`:kind==='correction'?`<h4>Usulan koreksi</h4><p>${h(r.reason)}</p>${reviewProposal(r.proposed_json)}${replacementLink}<p class="tiny muted">Data resmi berubah hanya setelah keputusan disetujui.</p>`:`<h4>Permintaan pemulihan</h4><p>${h(r.reason)}</p><p class="tiny">SLA: ${h(r.sla_status)} · ${h(r.assignment_stage)}</p>`;
   const canDecide=allowed&&!!t&&(!replacementExpected||replacementAvailable);
   modal('Periksa & Putuskan',`${context}${evidence}${canDecide?`<form id="review-decision-form" class="mt">
