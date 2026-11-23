@@ -38,7 +38,7 @@ with TestClient(app) as c:
         r=c.post('/api/batches/'+batch+'/documents',files={'file':('fixture.pdf',b'%PDF-1.4\n'+tag.encode(),'application/pdf')},headers=headers)
         assert r.status_code==200,r.text
         tid=r.json()['transaction_id']
-        r=c.patch('/api/transactions/'+tid+'/draft',json={'transaction_date':day,'amount':amount,'description':tag,'category_id':cat,'contract_name':'Kontrak keluar','contract_number':'00019'},headers=headers)
+        r=c.patch('/api/transactions/'+tid+'/draft',json={'transaction_date':day,'amount':amount,'description':tag,'category_name':('  jasa   lapangan ' if tag=='draft' else 'Jasa Lapangan'),'contract_name':'Kontrak keluar','contract_number':'00019'},headers=headers)
         assert r.status_code==200,r.text
         if status=='DRAFT': return
         assert post('/api/transactions/submit-batch',{'ids':[tid]}).status_code==200
@@ -77,6 +77,8 @@ with TestClient(app) as c:
         cells = dict(zip((c.value for c in wb[sheet][1]), wb[sheet][row]))
         assert cells['Nama Kontrak'].value == name
         assert cells['Nomor Kontrak'].value == number
+    assert wb['Pengeluaran']['E2'].value=='Jasa Lapangan'
+    assert sum(cat['name'].lower()=='jasa lapangan' for cat in c.get('/api/config').json()['categories'])==1
     assert wb['Pengeluaran']['I2'].hyperlink
     assert 'MHS_Pemasukan' in wb['Pemasukan'].tables
     assert 'MHS_Pengeluaran' in wb['Pengeluaran'].tables

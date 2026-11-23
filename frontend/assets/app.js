@@ -532,7 +532,7 @@ function renderOCREvidence(result){
    <b class="tiny">Kandidat tanggal</b><div class="row wrap" style="gap:6px">${dateRows||'<span class="tiny muted">Tidak terdeteksi. Isi manual.</span>'}</div>
    ${context.length?`<div class="ocr-context"><b>Tanggal referensi surat mungkin bukan tanggal pembayaran.</b>${context.map(x=>`<p>${h(x)}</p>`).join('')}</div>`:''}
    ${fieldRows||'<p class="tiny muted">Tidak ada kandidat vendor, keterangan, metode bayar atau nomor dokumen yang cukup jelas.</p>'}
-   ${cats.length?`<b class="tiny">Saran kategori berdasarkan keterangan</b><div class="row wrap">${cats.map(c=>`<button type="button" class="btn soft" data-ocr-field="category_id" data-ocr-value="${h(c.id)}">${h(c.name)}</button>`).join('')}</div>`:''}
+   ${cats.length?`<b class="tiny">Saran kategori berdasarkan keterangan</b><div class="row wrap">${cats.map(c=>`<button type="button" class="btn soft" data-ocr-field="category_name" data-ocr-value="${h(c.name)}">${h(c.name)}</button>`).join('')}</div>`:''}
    <details class="mt"><summary>Teks mentah OCR (${Number.isFinite(result.confidence)?Math.round(result.confidence)+'% skor mesin':'tanpa skor'}; bukan akurasi terukur)</summary><pre style="white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto">${h((result.text||'').slice(0,16000))}</pre></details>`;
 }
 
@@ -554,7 +554,7 @@ async function editDraft(id){
     <form id="draft-form" class="grid2" style="align-content:start">${ocrPanel}
       ${field('Tanggal transaksi*','transaction_date',t.transaction_date||'','date',true)}
       ${field('Nominal IDR*','amount',t.amount_cents===null?'':t.amount_cents/100,'number',true,'min="0" step="0.01"')}
-      ${selectF('Kategori*','category_id',state.config.categories,t.category_id,true)}
+      ${field('Kategori*','category_name',t.category_name||'','text',true,'maxlength="120" placeholder="Ketik kategori pengeluaran"')}
       ${field('Vendor','vendor',t.vendor||'')}
       ${field('Keterangan*','description',t.description||'','text',true)}
       ${field('Metode Pembayaran','payment_method',t.payment_method||'')}
@@ -575,7 +575,7 @@ async function editDraft(id){
     const date=ev.target.closest('[data-ocr-date]');
     if(date){draftForm.elements.transaction_date.value=date.dataset.ocrDate;return}
     const fieldBtn=ev.target.closest('[data-ocr-field]');
-    if(fieldBtn && ['vendor','description','payment_method','invoice_number','contract_name','contract_number','category_id'].includes(fieldBtn.dataset.ocrField)){
+    if(fieldBtn && ['vendor','description','payment_method','invoice_number','contract_name','contract_number','category_name'].includes(fieldBtn.dataset.ocrField)){
       const field=draftForm.elements.namedItem(fieldBtn.dataset.ocrField);
       if(field){
         field.value=fieldBtn.dataset.ocrValue;
@@ -625,9 +625,14 @@ async function editDraft(id){
     if(activityYears.length===1 && receiptYear && receiptYear!==activityYears[0] &&
        !confirm('Tanggal kuitansi '+receiptYear+' berbeda dari tahun pada nama aktivitas '+activityYears[0]+'. Laporan mengikuti tanggal kuitansi. Tetap simpan?'))return;
 
-    if(!o.category_id)o.category_id=null;
+    o.category_name=o.category_name.trim();
+    if(!o.category_name)return toast('Kategori wajib diisi',true);
     try{
-      await patch('/transactions/'+id+'/draft',o);
+      const {category}=await patch('/transactions/'+id+'/draft',o);
+      if(category && !state.config.categories.some(c=>c.id===category.id)){
+        state.config.categories.push(category);
+        state.config.categories.sort((a,b)=>a.name.localeCompare(b.name,'id'));
+      }
       toast('Draft berhasil disimpan. OCR tidak otomatis menjadi approval.');
       closeModal();await nav(state.page==='upload'?'upload':'transactions');
     }catch(err){toast(err.message,true)}

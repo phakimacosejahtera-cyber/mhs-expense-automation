@@ -541,6 +541,7 @@ def read_browser_ocr(request:Request,txid:str):
 class DraftData(BaseModel):
     transaction_date:str|None=None;amount:str|int|float|None=None;description:str|None=None
     category_id:str|None=None;vendor:str|None=None;payment_method:str|None=None
+    category_name: str | None = Field(default=None, max_length=120)
     contract_name: str | None = Field(default=None, max_length=300)
     contract_number: str | None = Field(default=None, max_length=120)
     invoice_number:str|None=None;notes:str|None=None;mixed_receipt:bool=False
@@ -558,9 +559,22 @@ def edit_draft(request:Request,txid:str,data:DraftData):
         if not t:raise HTTPException(404,'Transaksi tidak ditemukan')
         own_or_admin(u,t['uploader_id'])
         if t['status']!='DRAFT' or t['deleted_at']:raise HTTPException(409,'Hanya draft aktif yang dapat diedit langsung')
-        if data.category_id and not one(c,'SELECT id FROM categories WHERE id=? AND active=1',(data.category_id,)):
+        category_id = data.category_id
+        category = None
+        if data.category_name is not None:
+            name = ' '.join(data.category_name.split())
+            if not name:
+                raise HTTPException(422, 'Kategori wajib diisi')
+            category = one(c, 'SELECT id,name,active FROM categories WHERE LOWER(name)=LOWER(?) ORDER BY active DESC,id LIMIT 1', (name,))
+            if category is None:
+                category = {'id': uid(), 'name': name, 'active': 1}
+                c.execute('INSERT INTO categories(id,name,active) VALUES (?,?,1)', (category['id'], name))
+            if not category['active']:
+                raise HTTPException(422, 'Kategori ini sudah dinonaktifkan')
+            category_id = category['id']
+        elif category_id and not one(c,'SELECT id FROM categories WHERE id=? AND active=1',(data.category_id,)):
             raise HTTPException(422,'Kategori tidak dikenal')
-        fields=(data.transaction_date,cents,(data.description or '')[:500],data.category_id,
+        fields=(data.transaction_date,cents,(data.description or '')[:500],category_id,
                 (data.vendor or '')[:200],(data.payment_method or '')[:100],(data.invoice_number or '')[:100],
                 (data.notes or '')[:2000],data.contract_name,data.contract_number,txid)
         c.execute('''UPDATE transactions SET transaction_date=?,amount_cents=?,description=?,category_id=?,vendor=?,payment_method=?,invoice_number=?,notes=?,contract_name=COALESCE(?,contract_name),contract_number=COALESCE(?,contract_number),revision=revision+1,updated_at=? WHERE id=?''',
@@ -570,7 +584,7 @@ def edit_draft(request:Request,txid:str,data:DraftData):
         if data.mixed_receipt:old.append('Kuitansi berisi beberapa kategori')
         c.execute('UPDATE transactions SET risk_reasons=? WHERE id=?',(js(old),txid))
         audit(c,u['id'],'DRAFT_EDITED','transaction',txid,{'revision':t['revision']+1})
-    return {'ok':True}
+    return {'ok': True, 'category': category}
 
 class SubmitIn(BaseModel):ids:list[str]=Field(min_length=1,max_length=100);late_reason:str|None=None
 @app.post('/api/transactions/submit-batch')
