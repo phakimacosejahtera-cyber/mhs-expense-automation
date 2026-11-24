@@ -10,7 +10,7 @@ from .owner_auth import OwnerConfig, OwnerAuthError, new_verifier, authorize_url
 OWNER_CONFIG = OwnerConfig.from_env() if APP_MODE in ('owner_test', 'pg_test', 'hosted_preview') else None
 
 import os, json, hashlib, secrets, mimetypes, re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from datetime import datetime,timedelta,timezone
 from io import BytesIO
 from contextlib import asynccontextmanager
@@ -60,10 +60,18 @@ async def security_boundary(request:Request,call_next):
     return apply_security_headers(response,request.url.path,HTTPS_OWNER)
 
 
+if APP_MODE == 'demo':
+    from . import finance_preview
+    app.include_router(finance_preview.router)
+
+
 def startup():
     if CLOUD_STORAGE:
         CLOUD_STORAGE.check_private()
     init_schema()
+    if APP_MODE == 'demo':
+        finance_preview.initialize()
+        finish_local_draft_purges()
     if HOSTED_PREVIEW:
         CLOUD_STORAGE.check_preview_scope()
         # Reuse only the already initialized synthetic test data and its bound owner.
@@ -99,7 +107,20 @@ def startup():
 @asynccontextmanager
 async def lifespan(app):
     startup()
-    yield
+    stop = worker = None
+    if APP_MODE == 'demo' and CLOUD_STORAGE is None and os.getenv('MHS_AUTO_BACKUP') == '1':
+        import threading
+        from .backup_local import daily_loop
+        stop = threading.Event()
+        worker = threading.Thread(target=daily_loop, args=(DATA, stop), daemon=True, name='mhs-backup')
+        worker.start()
+    try:
+        yield
+    finally:
+        if stop is not None:
+            stop.set()
+            await run_in_threadpool(worker.join, 5)
+
 
 app.router.lifespan_context=lifespan
 
@@ -190,6 +211,57 @@ def logout(request:Request):
     resp=Response(content=js({'ok':True}),media_type='application/json');resp.delete_cookie('mhs_session',path='/',secure=HTTPS_OWNER,httponly=True,samesite='strict');return resp
 
 def auth(request:Request,write=False):return get_auth(request,unsafe=write)
+
+# Local preview only. Recovery never overwrites the running database.
+if APP_MODE == 'demo' and CLOUD_STORAGE is None:
+    from . import backup_local as backup
+    from starlette.background import BackgroundTask
+    import tempfile
+    import shutil
+
+    @app.get('/api/admin/storage/status')
+    def local_storage_status(request:Request):
+        admin_only(auth(request))
+        import sqlite3
+        from .storage_local import storage_status
+        try:
+            return storage_status(DATA)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error):
+            raise HTTPException(503,'Penyimpanan belum dapat diperiksa. Coba lagi.') from None
+
+    @app.get('/api/admin/backup/status')
+    def backup_status(request:Request):
+        admin_only(auth(request))
+        items = backup.daily_archives(DATA)
+        return {'automatic':os.getenv('MHS_AUTO_BACKUP')=='1',
+                'state':backup.DAILY_STATUS['state'],
+                'latest':items[0].name if items else None,'count':len(items)}
+
+    @app.post('/api/admin/backup/download')
+    def backup_download(request:Request):
+        admin_only(auth(request,True))
+        work=Path(tempfile.mkdtemp(prefix='mhs-download-',dir=backup.backup_directory(DATA)))
+        path=work/'MHS_Backup.zip'
+        try:
+            backup.create_backup(DATA,path)
+        except Exception:
+            shutil.rmtree(work,ignore_errors=True)
+            raise HTTPException(503,'Backup belum berhasil. Periksa penyimpanan dan integritas dokumen.') from None
+        return FileResponse(path,filename='MHS_Backup_'+datetime.now().strftime('%Y%m%d-%H%M%S')+'.zip',
+                            media_type='application/zip',headers={'Cache-Control':'private, no-store'},
+                            background=BackgroundTask(shutil.rmtree,work,ignore_errors=True))
+
+    @app.post('/api/admin/backup/recover-latest')
+    def backup_recover_latest(request:Request):
+        admin_only(auth(request,True))
+        items=backup.daily_archives(DATA)
+        if not items:raise HTTPException(404,'Belum ada backup harian.')
+        target=DATA.resolve().parent/('mhs-recovery-'+uid())
+        try:
+            result=backup.restore_backup(items[0],target)
+        except Exception:
+            raise HTTPException(422,'Cadangan tidak dapat dipulihkan. Data aktif tidak berubah.') from None
+        return {'created_at':result['created_at'],'files':result['files'],'folder':target.name}
 
 @app.get('/api/config')
 def config(request:Request):
@@ -282,6 +354,12 @@ def store_file(data,ext):
             return CLOUD_STORAGE.put(data,ext)
         except StorageError:
             raise HTTPException(503,'Penyimpanan cloud uji tidak tersedia') from None
+    if APP_MODE == 'demo':
+        from .storage_local import write_receipt
+        try:
+            return write_receipt(DATA,uid()+ext,data)
+        except (OSError, ValueError):
+            raise HTTPException(503,'Kuitansi belum tersimpan. Periksa ruang penyimpanan dan coba kembali.') from None
     folder=DATA/'private_docs';folder.mkdir(parents=True,exist_ok=True)
     key=uid()+ext;path=folder/key;path.write_bytes(data)
     return str(path)
@@ -339,6 +417,28 @@ async def upload(request:Request,batch_id:str,file:UploadFile=File(...)):
         raise
     return {'document_id':doc,'transaction_id':txid,'ocr_status':'MANUAL_REQUIRED','risk_reasons':risks}
 
+@app.get('/api/transactions/{txid}/pdf-ocr-page')
+def pdf_ocr_page(request:Request,txid:str,page:int=1,raster:bool=False):
+    u=auth(request)
+    if APP_MODE!='demo':
+        raise HTTPException(403,'PDF OCR saat ini khusus demo lokal')
+    with connection() as c:
+        t=one(c,'SELECT * FROM transactions WHERE id=? AND deleted_at IS NULL',(txid,))
+        if not t:raise HTTPException(404,'Draft tidak ditemukan')
+        own_or_admin(u,t['uploader_id'])
+        if t['status']!='DRAFT':raise HTTPException(409,'Hanya draft aktif')
+        v=one(c,'SELECT v.* FROM documents d JOIN document_versions v ON v.id=d.active_version_id WHERE d.id=?',(t['document_id'],))
+    if not v or v['media_type']!='application/pdf':raise HTTPException(422,'Bukan PDF')
+    try:
+        path=legacy_local_path(v['storage_path'],DATA)
+        if path.stat().st_size>8*1024*1024:raise ValueError()
+        raw=path.read_bytes()
+        if len(raw)!=v['file_size'] or hashlib.sha256(raw).hexdigest()!=v['sha256']:raise ValueError()
+        from .pdf_ocr import read_pdf_page
+        return {**read_pdf_page(raw,page,raster),'document_sha256':v['sha256']}
+    except Exception:
+        raise HTTPException(422,'PDF tidak dapat diproses. Gunakan input manual; maksimum 5 halaman PDF tanpa password.') from None
+
 class BrowserOCRObservation(BaseModel):
     text: str = Field(max_length=16000)
     confidence: float | None = Field(default=None, ge=0, le=100)
@@ -362,6 +462,56 @@ def save_browser_ocr(request:Request,txid:str,data:BrowserOCRObservation):
               {'run_id':run_id,'provider':'TESSERACT_JS_CLIENT','verified':False})
     return {'ok':True,'status':'EXTRACTED','verified':False,'run_id':run_id}
 
+class PaddleRunIn(BaseModel):
+    browser_run_id: str | None = Field(default=None,max_length=64)
+
+@app.post('/api/transactions/{txid}/paddle-ocr')
+def run_paddle_ocr(request:Request,txid:str,data:PaddleRunIn):
+    u=auth(request,True)
+    from . import paddle_local
+    if APP_MODE!='demo' or not paddle_local.enabled():
+        return {'status':'UNAVAILABLE','message':'PaddleOCR lokal belum aktif'}
+    with connection() as c:
+        t=one(c,'SELECT * FROM transactions WHERE id=? AND deleted_at IS NULL',(txid,))
+        if not t:raise HTTPException(404,'Draft tidak ditemukan')
+        own_or_admin(u,t['uploader_id'])
+        if t['status']!='DRAFT':raise HTTPException(409,'Hanya draft aktif')
+        v=one(c,'SELECT v.* FROM documents d JOIN document_versions v ON v.id=d.active_version_id WHERE d.id=?',(t['document_id'],))
+        if data.browser_run_id and not one(c,"SELECT id FROM extraction_runs WHERE id=? AND document_id=? AND provider='TESSERACT_JS_CLIENT'",(data.browser_run_id,t['document_id'])):
+            raise HTTPException(422,'Hasil OCR pembanding tidak ditemukan')
+    if not v:raise HTTPException(404,'Dokumen tidak ditemukan')
+    import logging
+    logger=logging.getLogger("uvicorn.error")
+    stage="STORAGE_PATH"
+    try:
+        path=legacy_local_path(v['storage_path'],DATA)
+        stage="FILE_SIZE"
+        if not 0<path.stat().st_size<=8*1024*1024:raise ValueError()
+        raw=path.read_bytes()
+        if len(raw)!=v['file_size']:raise ValueError()
+        stage="FILE_HASH"
+        if hashlib.sha256(raw).hexdigest()!=v['sha256']:raise ValueError()
+        stage="PADDLE_WORKER"
+        logger.info("PaddleOCR: receipt integrity verified; starting local worker")
+        result=paddle_local.recognize(raw,v['media_type'])
+        if not result:raise ValueError()
+    except Exception as exc:
+        code=getattr(exc,"code",None) if stage=="PADDLE_WORKER" else None
+        code=code or stage
+        logger.warning("PaddleOCR failed: stage=%s code=%s exception=%s",stage,code,type(exc).__name__)
+        return {'status':'FAILED','error_code':code,'message':'PaddleOCR gagal ('+code+'); periksa hasil Tesseract atau isi manual'}
+    logger.info("PaddleOCR: local worker completed; recording unverified evidence")
+    with tx() as c:
+        current=one(c,'SELECT t.status,t.deleted_at,d.active_version_id FROM transactions t JOIN documents d ON d.id=t.document_id WHERE t.id=?',(txid,))
+        if not current or current['deleted_at'] or current['status']!='DRAFT' or current['active_version_id']!=v['id']:
+            raise HTTPException(409,'Draft atau versi dokumen berubah')
+        run_id=uid()
+        payload={**result,'browser_run_id':data.browser_run_id,'document_version_id':v['id']}
+        c.execute('INSERT INTO extraction_runs(id,document_id,status,provider,raw_json,created_at) VALUES (?,?,?,?,?,?)',
+                  (run_id,t['document_id'],'EXTRACTED','PADDLE_LOCAL',js(payload),now()))
+        audit(c,u['id'],'OCR_PADDLE_RECORDED','document',t['document_id'],{'run_id':run_id,'verified':False,'browser_run_id':data.browser_run_id})
+    return {'status':'EXTRACTED','verified':False,'run_id':run_id}
+
 @app.get('/api/transactions/{txid}/ocr-result')
 def read_browser_ocr(request:Request,txid:str):
     u=auth(request)
@@ -369,13 +519,32 @@ def read_browser_ocr(request:Request,txid:str):
         t=one(c,'SELECT uploader_id,document_id FROM transactions WHERE id=? AND deleted_at IS NULL',(txid,))
         if not t:raise HTTPException(404,'Transaksi tidak ditemukan')
         own_or_admin(u,t['uploader_id'])
-        row=one(c,"SELECT raw_json FROM extraction_runs WHERE document_id=? AND provider='TESSERACT_JS_CLIENT' ORDER BY created_at DESC, rowid DESC LIMIT 1",(t['document_id'],))
-        if not row:raise HTTPException(404,'Belum ada hasil OCR Tesseract.js')
-        return json.loads(row['raw_json'])
+        from .ocr_candidates import enrich_observation
+        if APP_MODE!='demo':
+            row=one(c,"SELECT raw_json FROM extraction_runs WHERE document_id=? AND provider='TESSERACT_JS_CLIENT' ORDER BY created_at DESC, rowid DESC LIMIT 1",(t['document_id'],))
+            if not row:raise HTTPException(404,'Belum ada hasil OCR')
+            return enrich_observation(json.loads(row['raw_json']))
+        runs=allrows(c,"SELECT id,provider,raw_json FROM extraction_runs WHERE document_id=? AND provider IN ('TESSERACT_JS_CLIENT','PADDLE_LOCAL') ORDER BY created_at DESC,rowid DESC LIMIT 1",(t['document_id'],))
+        if not runs:raise HTTPException(404,'Belum ada hasil OCR')
+        latest=runs[0]; payload=json.loads(latest['raw_json'])
+        if latest['provider']=='TESSERACT_JS_CLIENT':
+            return enrich_observation(payload)
+        version=one(c,'SELECT active_version_id FROM documents WHERE id=?',(t['document_id'],))
+        if payload.get('document_version_id')!=version['active_version_id']:
+            raise HTTPException(404,'Hasil OCR tidak sesuai versi aktif')
+        browser=None
+        if payload.get('browser_run_id'):
+            row=one(c,"SELECT raw_json FROM extraction_runs WHERE id=? AND document_id=? AND provider='TESSERACT_JS_CLIENT'",(payload['browser_run_id'],t['document_id']))
+            if row:browser=json.loads(row['raw_json'])
+        from .ocr_candidates import combine_observations
+        return combine_observations(browser,payload)
 
 class DraftData(BaseModel):
     transaction_date:str|None=None;amount:str|int|float|None=None;description:str|None=None
     category_id:str|None=None;vendor:str|None=None;payment_method:str|None=None
+    category_name: str | None = Field(default=None, max_length=120)
+    contract_name: str | None = Field(default=None, max_length=300)
+    contract_number: str | None = Field(default=None, max_length=120)
     invoice_number:str|None=None;notes:str|None=None;mixed_receipt:bool=False
 
 @app.patch('/api/transactions/{txid}/draft')
@@ -391,19 +560,32 @@ def edit_draft(request:Request,txid:str,data:DraftData):
         if not t:raise HTTPException(404,'Transaksi tidak ditemukan')
         own_or_admin(u,t['uploader_id'])
         if t['status']!='DRAFT' or t['deleted_at']:raise HTTPException(409,'Hanya draft aktif yang dapat diedit langsung')
-        if data.category_id and not one(c,'SELECT id FROM categories WHERE id=? AND active=1',(data.category_id,)):
+        category_id = data.category_id
+        category = None
+        if data.category_name is not None:
+            name = ' '.join(data.category_name.split())
+            if not name:
+                raise HTTPException(422, 'Kategori wajib diisi')
+            category = one(c, 'SELECT id,name,active FROM categories WHERE LOWER(name)=LOWER(?) ORDER BY active DESC,id LIMIT 1', (name,))
+            if category is None:
+                category = {'id': uid(), 'name': name, 'active': 1}
+                c.execute('INSERT INTO categories(id,name,active) VALUES (?,?,1)', (category['id'], name))
+            if not category['active']:
+                raise HTTPException(422, 'Kategori ini sudah dinonaktifkan')
+            category_id = category['id']
+        elif category_id and not one(c,'SELECT id FROM categories WHERE id=? AND active=1',(data.category_id,)):
             raise HTTPException(422,'Kategori tidak dikenal')
-        fields=(data.transaction_date,cents,(data.description or '')[:500],data.category_id,
+        fields=(data.transaction_date,cents,(data.description or '')[:500],category_id,
                 (data.vendor or '')[:200],(data.payment_method or '')[:100],(data.invoice_number or '')[:100],
-                (data.notes or '')[:2000],txid)
-        c.execute('''UPDATE transactions SET transaction_date=?,amount_cents=?,description=?,category_id=?,vendor=?,payment_method=?,invoice_number=?,notes=?,revision=revision+1,updated_at=? WHERE id=?''',
+                (data.notes or '')[:2000],data.contract_name,data.contract_number,txid)
+        c.execute('''UPDATE transactions SET transaction_date=?,amount_cents=?,description=?,category_id=?,vendor=?,payment_method=?,invoice_number=?,notes=?,contract_name=COALESCE(?,contract_name),contract_number=COALESCE(?,contract_number),revision=revision+1,updated_at=? WHERE id=?''',
                   fields[:-1]+(now(),fields[-1]))
         old=json.loads(t['risk_reasons'])
         old=[x for x in old if 'duplikat' in x.lower()]
         if data.mixed_receipt:old.append('Kuitansi berisi beberapa kategori')
         c.execute('UPDATE transactions SET risk_reasons=? WHERE id=?',(js(old),txid))
         audit(c,u['id'],'DRAFT_EDITED','transaction',txid,{'revision':t['revision']+1})
-    return {'ok':True}
+    return {'ok': True, 'category': category}
 
 class SubmitIn(BaseModel):ids:list[str]=Field(min_length=1,max_length=100);late_reason:str|None=None
 @app.post('/api/transactions/submit-batch')
@@ -501,8 +683,8 @@ def review_queue(request:Request):
     u=auth(request);admin_only(u)
     with connection() as c:
         return {
-         'transactions':allrows(c,"SELECT t.*,us.name uploader_name FROM transactions t JOIN users us ON us.id=t.uploader_id WHERE status='PENDING_REVIEW' ORDER BY submitted_at LIMIT 200"),
-         'corrections':allrows(c,"SELECT r.*,t.description FROM correction_requests r JOIN transactions t ON t.id=r.transaction_id WHERE r.status='PENDING' ORDER BY r.created_at LIMIT 200"),
+         'transactions':allrows(c,"SELECT t.*,us.name uploader_name,c.name category_name FROM transactions t JOIN users us ON us.id=t.uploader_id LEFT JOIN categories c ON c.id=t.category_id WHERE t.status='PENDING_REVIEW' ORDER BY submitted_at LIMIT 200"),
+         'corrections':allrows(c,"SELECT r.*,t.description,v.version_number AS replacement_version_number FROM correction_requests r JOIN transactions t ON t.id=r.transaction_id LEFT JOIN document_versions v ON v.id=r.replacement_version_id AND v.document_id=t.document_id WHERE r.status='PENDING' ORDER BY r.created_at LIMIT 200"),
          'reinstatements':allrows(c,"SELECT r.*,t.description FROM reinstatement_requests r JOIN transactions t ON t.id=r.transaction_id WHERE r.status='PENDING' ORDER BY r.created_at LIMIT 200")}
 
 @app.post('/api/admin/transactions/{txid}/decision')
@@ -680,6 +862,7 @@ class BudgetIn(BaseModel):
 @app.post('/api/dashboard/income')
 def set_dashboard_income(request:Request, data:BudgetIn):
     u=auth(request,True)
+    admin_only(u)
     with tx() as c:
         c.execute('''CREATE TABLE IF NOT EXISTS app_settings(
             key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -744,16 +927,16 @@ def export_report(request:Request,activity_id:str|None=None):
     sql+=' ORDER BY t.transaction_date,t.id'
     with connection() as c:rows=allrows(c,sql,args)
     wb=Workbook();ws=wb.active;ws.title='Transactions'
-    heads=['Date','Amount (IDR)','Description','Vendor','Category','Payment Method','Invoice Number','Uploader','Receipt Link','Notes','Transaction ID','Activity']
+    heads=['Date','Amount (IDR)','Description','Vendor','Category','Payment Method','Invoice Number','Uploader','Receipt Link','Notes','Transaction ID','Activity','Nama Kontrak','Nomor Kontrak']
     ws.append(heads)
     base=PUBLIC_ORIGIN or 'http://127.0.0.1:8000'
     for r in rows:
         ws.append([safe_excel(r['transaction_date']),r['amount_cents']/100,safe_excel(r['description']),safe_excel(r['vendor']),
                    safe_excel(r['category_name']),safe_excel(r['payment_method']),safe_excel(r['invoice_number']),
-                   safe_excel(r['uploader_name']),base+'/api/receipts/'+r['document_id'],safe_excel(r['notes']),r['id'],safe_excel(r['activity_name'])])
+                   safe_excel(r['uploader_name']),base+'/api/receipts/'+r['document_id'],safe_excel(r['notes']),r['id'],safe_excel(r['activity_name']),safe_excel(r['contract_name']),safe_excel(r['contract_number'])])
     for cell in ws[1]:cell.fill=PatternFill('solid',fgColor='171717');cell.font=Font(color='FFFFFF',bold=True)
     ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
-    for col,w in {'A':15,'B':18,'C':42,'D':22,'E':24,'F':20,'G':22,'H':24,'I':55,'J':28,'K':42,'L':30}.items():ws.column_dimensions[col].width=w
+    for col,w in {'A':15,'B':18,'C':42,'D':22,'E':24,'F':20,'G':22,'H':24,'I':55,'J':28,'K':42,'L':30,'M':40,'N':28}.items():ws.column_dimensions[col].width=w
     for cell in ws['B'][1:]:cell.number_format='#,##0.00'
     sums=wb.create_sheet('Summary');sums.append(['Metric','Value']);sums.append(['Approved receipts',len(rows)]);sums.append(['Approved total (IDR)',sum(x['amount_cents'] for x in rows)/100])
     info=wb.create_sheet('Report Info');info.append(['Company','PT Mulia Hakimaco Sejahtera']);info.append(['Snapshot UTC',now()]);info.append(['Scope','all admin data' if u['role']=='admin' else 'own approved data']);info.append(['Activity filter',activity_id or 'ALL']);info.append(['Rule','Only current APPROVED; historic exports immutable'])
@@ -855,6 +1038,9 @@ def manual_escalate(request:Request,request_id:str,data:Escalation):
         if result=='BLOCKED':raise HTTPException(409,'Tidak ada admin cadangan eligible; permintaan tetap pending')
     return {'assignment_stage':'BACKUP','status':'PENDING'}
 
+class DraftCleanup(BaseModel):
+    token: str = Field(min_length=64, max_length=64)
+
 @app.delete('/api/transactions/{txid}/draft')
 def delete_draft(request:Request,txid:str):
     u=auth(request,True)
@@ -867,6 +1053,108 @@ def delete_draft(request:Request,txid:str):
         c.execute('UPDATE transactions SET deleted_at=?,purge_at=? WHERE id=?',(now(),expiry,txid))
         audit(c,u['id'],'DRAFT_SOFT_DELETED','transaction',txid,{'purge_at':expiry})
     return {'status':'SOFT_DELETED','purge_at':expiry}
+
+@app.get('/api/admin/drafts/deleted')
+def deleted_drafts(request: Request):
+    admin_only(auth(request))
+    with connection() as c:
+        rows = allrows(c, """SELECT t.id,t.description,t.deleted_at,t.purge_at,v.filename,u.name AS uploader_name
+            FROM transactions t JOIN users u ON u.id=t.uploader_id
+            JOIN documents d ON d.id=t.document_id
+            LEFT JOIN document_versions v ON v.id=d.active_version_id
+            WHERE t.status='DRAFT' AND t.deleted_at IS NOT NULL AND t.purge_at>?
+            ORDER BY t.deleted_at DESC,t.id""", (now(),))
+
+    return [dict(row, can_purge=APP_MODE == 'demo' and CLOUD_STORAGE is None) for row in rows]
+
+def finish_local_draft_purges(job_id=None):
+    with tx() as c:
+        sql = "SELECT id,payload FROM background_jobs WHERE kind='LOCAL_DRAFT_UNLINK'"
+        jobs = allrows(c, sql + (" AND id=?" if job_id else ""), (job_id,) if job_id else ())
+        for job in jobs:
+            for ref in json.loads(job['payload']):
+                path = Path(ref)
+                if path.parent.resolve() != (DATA/'private_docs').resolve():
+                    raise ValueError('Lokasi file tidak valid')
+                # A database copied from another machine can have a different
+                # directory prefix for the same locally stored receipt.
+                if not one(c, 'SELECT id FROM document_versions WHERE LOWER(storage_path) LIKE ? LIMIT 1', ('%'+path.name.lower(),)):
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        break
+            else:
+                c.execute('DELETE FROM background_jobs WHERE id=?', (job['id'],))
+                continue
+            if job_id:
+                return False
+    return True
+
+def require_local_purge(request, write):
+    user = auth(request, write)
+    admin_only(user)
+    if APP_MODE != 'demo' or CLOUD_STORAGE is not None:
+        raise HTTPException(409, 'Penghapusan file hanya tersedia pada penyimpanan lokal.')
+    return user
+
+def queue_draft_purge(c, txid, doc, user):
+    folder = DATA.resolve() / 'private_docs'
+    if folder.resolve() != folder:
+        raise HTTPException(409, 'Periksa folder penyimpanan kuitansi lokal.')
+    refs = []
+    versions = allrows(c, 'SELECT storage_path,file_size,sha256 FROM document_versions WHERE document_id=?', (doc,))
+    for version in versions:
+        ref = version['storage_path']
+        stored = PureWindowsPath(ref)
+        if stored.parent.name.lower() != 'private_docs' or not re.fullmatch(r'[a-fA-F0-9-]{36}\.(?:pdf|png|jpg|webp)', stored.name, re.I):
+            raise HTTPException(409, 'Referensi kuitansi tidak dikenali. Periksa arsip sebelum menghapus draft.')
+        path = folder / stored.name
+        if path.is_symlink():
+            raise HTTPException(409, 'Lokasi kuitansi merujuk ke tautan file.')
+        if Path(ref).parent.resolve() != folder and path.exists():
+            if path.stat().st_size != version['file_size'] or hashlib.sha256(path.read_bytes()).hexdigest() != version['sha256']:
+                raise HTTPException(409, 'Salinan kuitansi lokal berbeda dari arsip draft.')
+        refs.append(str(path))
+    job=uid()
+    c.execute("INSERT INTO background_jobs(id,kind,status,payload,created_at,updated_at) VALUES (?,'LOCAL_DRAFT_UNLINK','PENDING',?,?,?)",(job,js(refs),now(),now()))
+    c.execute('DELETE FROM extraction_runs WHERE document_id=?',(doc,))
+    c.execute('DELETE FROM transactions WHERE id=?',(txid,))
+    c.execute('DELETE FROM document_versions WHERE document_id=?',(doc,))
+    c.execute('DELETE FROM documents WHERE id=?',(doc,))
+    audit(c,user['id'],'DRAFT_PURGED','transaction',txid,{})
+    return job
+
+@app.delete('/api/admin/drafts/{txid}/permanent')
+def purge_deleted_draft(request:Request, txid:str):
+    user = require_local_purge(request, True)
+    with tx() as c:
+        draft = one(c, "SELECT document_id FROM transactions WHERE id=? AND status='DRAFT' AND deleted_at IS NOT NULL", (txid,))
+        if not draft:
+            raise HTTPException(409, 'Draft sudah berubah. Muat ulang daftar.')
+        job = queue_draft_purge(c, txid, draft['document_id'], user)
+    return {'files_removed': finish_local_draft_purges(job)}
+
+def trash_snapshot(c):
+    rows = allrows(c, "SELECT id,document_id,deleted_at,revision FROM transactions WHERE status='DRAFT' AND deleted_at IS NOT NULL ORDER BY id")
+    return rows, hashlib.sha256(js(rows).encode()).hexdigest()
+
+@app.get('/api/admin/drafts/empty-trash')
+def preview_empty_trash(request: Request):
+    require_local_purge(request, False)
+    with connection() as c:
+        rows, token = trash_snapshot(c)
+    return {'count': len(rows), 'token': token}
+
+@app.post('/api/admin/drafts/empty-trash')
+def empty_trash(request: Request, data: DraftCleanup):
+    user = require_local_purge(request, True)
+    with tx() as c:
+        rows, token = trash_snapshot(c)
+        if token != data.token:
+            raise HTTPException(409, 'Isi Draft terhapus berubah. Periksa jumlahnya kembali.')
+        jobs = [queue_draft_purge(c, row['id'], row['document_id'], user) for row in rows]
+    pending = sum(not finish_local_draft_purges(job) for job in jobs)
+    return {'count': len(rows), 'pending': pending}
 
 @app.post('/api/admin/transactions/{txid}/restore')
 def restore_draft(request:Request,txid:str):

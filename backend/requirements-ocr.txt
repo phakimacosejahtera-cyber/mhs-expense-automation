@@ -1,0 +1,5 @@
+# Install only in .venv-ocr (Python 3.11 x64 recommended).
+# Install paddlepaddle==3.2.0 from official CPU index first.
+paddleocr==3.3.0
+pypdfium2>=5.8,<6
+Pillow>=12.2,<13

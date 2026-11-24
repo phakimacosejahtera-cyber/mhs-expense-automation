@@ -1,0 +1,58 @@
+
+/* MHS workspace shell — shared by all existing modules. */
+.mark{display:flex;align-items:center;justify-content:center;letter-spacing:-1.5px;padding:0;background:#f4831e}
+#sidebar{background:#171717;padding:22px 14px 18px;width:248px;border-right:1px solid #292929}
+#sidebar .brand{padding:5px 8px 25px;gap:11px;align-items:center}
+#sidebar .brand strong{font-size:15px;color:#fafafa;line-height:1.25}
+#sidebar .brand small{color:#a4a4a4;font-size:9px;letter-spacing:.65px;line-height:1.5}
+#sidebar .workspace-chip{margin:0 3px 24px;padding:12px;background:#222;border-color:#343434;gap:11px}
+.workspace-icon{flex:none;width:38px;height:38px;color:#ffad68;background:#493424}
+#sidebar .sidebar-title,.nav-section{font-size:10px;color:#a3a3a3;font-weight:700;letter-spacing:1.2px;margin:0 12px 8px}
+.nav-section{margin:22px 12px 6px}
+#navigation{display:flex;flex-direction:column;gap:4px}
+#navigation .navbutton{position:relative;min-height:44px;width:100%;padding:10px 12px;gap:12px;border-radius:9px;color:#c2c2c2;font-size:13px;font-weight:600}
+#navigation .navbutton:hover{background:#292929;color:#fff}
+#navigation .navbutton.active{background:#402c1d;color:#ffae66}
+#navigation .navbutton.active::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;background:#f4831e;border-radius:0 3px 3px 0}
+#navigation .navicon{display:flex;align-items:center;justify-content:center;flex:none;width:22px;color:inherit}
+#navigation .navlabel{min-width:0;line-height:1.35}
+#sidebar .sidebar-bottom{padding:16px 8px 0;margin-top:auto;border-top:1px solid #303030;color:#dedede}
+#sidebar .sidebar-bottom small{color:#a3a3a3;line-height:1.6}
+#sidebar .logout-btn{display:flex;align-items:center;gap:9px;min-height:40px;background:#222;border-color:#383838}
+#sidebar .logout-btn:hover{background:#303030;color:#fff}
+.topbar{height:72px;gap:14px;background:#fff;border-bottom:1px solid #e7e9ed;box-shadow:0 2px 12px #0f172a04}
+.top-left{min-width:0;display:flex;align-items:center;gap:10px}
+.crumb{color:#737b87;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crumb strong{color:#1f2937;font-weight:700}
+.topbar .top-right{gap:20px;flex:none}
+.topbar .today{color:#64748b;font-size:12px}
+.profile-block{display:flex;align-items:center;gap:9px;border-left:1px solid #e9e9e9;padding-left:16px}
+.profile-block .avatar{width:38px;height:38px;border-radius:11px;background:#fff0df;color:#a9510d;border:1px solid #f2d1b0;flex:none}
+.profile-copy{display:flex;flex-direction:column;align-items:flex-start;gap:3px;max-width:140px}
+.profile-copy strong{font-size:12px;line-height:1.25;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#242424}
+.profile-copy .role-chip{font-size:9px;padding:2px 6px;line-height:1.3;background:#f8f2ec;color:#97571f}
+@media(max-width:1100px){#sidebar{width:224px}.topbar .top-right{gap:12px}}
+@media(max-width:850px){#sidebar{width:260px}}
+@media(max-width:620px){.topbar .top-right{gap:8px}.profile-block{padding-left:8px}.profile-copy{max-width:80px}.profile-block .avatar{width:32px;height:32px}.crumb{font-size:11px}}
+@media(max-width:360px){.profile-copy{display:none}}
+
+
+/* Refined workspace: warm brand accents and a compact Jakarta clock. */
+#sidebar{background:linear-gradient(160deg,#24201c 0%,#171717 28%,#141414 100%)}
+#sidebar .brand .mark{background:linear-gradient(145deg,#ffa64e,#f4831e);box-shadow:0 4px 16px #f4831e30;border:1px solid #ffb56d}
+#sidebar .workspace-chip{background:linear-gradient(130deg,#30251d,#222);border-color:#44352a}
+#navigation .navbutton.active{background:linear-gradient(90deg,#50331e,#30251e);box-shadow:inset 0 0 0 1px #f4831e24}
+#navigation .navbutton.active .navicon{color:#ffc18c}
+#sidebar .sidebar-bottom{margin-top:auto}
+.topbar .clock-block{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#f8fafc;border:1px solid #e7ebef;border-radius:12px;min-width:0}
+.clock-symbol{display:grid;place-items:center;width:32px;height:32px;flex:none;color:#a9510d;background:#fff0df;border-radius:9px}
+.clock-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+.clock-time-line{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
+#wib-clock{font-size:17px;line-height:1.15;letter-spacing:.3px;font-weight:750;color:#182230;font-variant-numeric:tabular-nums}
+.clock-zone{font-size:10px;color:#a9510d;font-weight:700}
+.topbar .clock-copy .today{font-size:10px;line-height:1.35;white-space:nowrap}
+.profile-block .avatar{background:linear-gradient(145deg,#fff4e8,#ffe2c5)}
+@media(max-width:850px){.topbar .clock-block{padding:6px 8px;gap:7px}}
+@media(max-width:620px){.topbar .clock-block{background:transparent;border:0;padding:0}.clock-symbol{display:none}#wib-clock{font-size:14px}.clock-zone{font-size:9px}.topbar .clock-copy .today{display:none}.topbar .profile-copy{display:none}.topbar .crumb b{padding:0 3px}}
+@media(max-width:360px){.topbar .crumb{max-width:100px}.topbar{gap:6px}.topbar .top-right{gap:6px}}
+@media(prefers-reduced-motion:reduce){#sidebar,.navbutton{transition:none}}

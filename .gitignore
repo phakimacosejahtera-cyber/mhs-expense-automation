@@ -31,3 +31,5 @@ __MACOSX/
 
 # Referensi UI pihak ketiga - tetap lokal
 docs/references/XTROI_UI_reference.html
+
+/.venv-ocr/
