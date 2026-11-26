@@ -35,7 +35,7 @@ export function matchesOwner(user, env) {
 }
 async function owner(config, env, token) {
   if (!token) return null;
-  const res = await fetch(config.base+'/auth/v1/user', {headers:{...config.headers, Authorization:'Bearer '+token}, redirect:'error'});
+  const res = await fetch(config.base+'/auth/v1/user', {headers:{...config.headers, Authorization:'Bearer '+token}, redirect:'manual'});
   if (!res.ok) return null;
   const user = await res.json();
   return matchesOwner(user, env) ? user : null;
@@ -58,7 +58,7 @@ export async function handle({request, env}) {
       const verifier = readCookie(request,verifierCookie);
       const code = searchParams.get('code');
       if (!/^[\w-]{43}$/.test(verifier) || !code || code.length>2048) return response(null,302,clear,'/?login=denied');
-      const res = await fetch(config.base+'/auth/v1/token?grant_type=pkce',{method:'POST',redirect:'error',
+      const res = await fetch(config.base+'/auth/v1/token?grant_type=pkce',{method:'POST',redirect:'manual',
         headers:{...config.headers,'Content-Type':'application/json'},body:JSON.stringify({auth_code:code,code_verifier:verifier})});
       const session = res.ok ? await res.json() : {};
       if (!await owner(config,env,session.access_token)) return response(null,302,clear,'/?login=denied');
@@ -70,7 +70,7 @@ export async function handle({request, env}) {
     if (request.method === 'POST' && pathname === '/api/auth/logout') {
       if (!csrf || csrf !== request.headers.get('X-CSRF-Token') || request.headers.get('Origin') !== env.MHS_PUBLIC_ORIGIN)
         return response({detail:'Permintaan ditolak'},403);
-      if (token) await fetch(config.base+'/auth/v1/logout?scope=local',{method:'POST',redirect:'error',headers:{...config.headers,Authorization:'Bearer '+token}});
+      if (token) await fetch(config.base+'/auth/v1/logout?scope=local',{method:'POST',redirect:'manual',headers:{...config.headers,Authorization:'Bearer '+token}});
       return response({ok:true},200,clear);
     }
     const user = await owner(config,env,token);
