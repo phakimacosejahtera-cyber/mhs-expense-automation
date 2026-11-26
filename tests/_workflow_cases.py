@@ -123,8 +123,6 @@ def test_correction_approved_only_then_reversal_excludes_from_report(client):
 
 @pytest.mark.parametrize("single_owner", [True, False])
 def test_reinstatement_assigned_admin_boundary(client, single_owner):
-    # Current application policy (also on main): the assigned admin may review
-    # their own request. This is not independent segregation of duties.
     hu=login(client);cat,act=category_activity(client);tid,_,_=upload(client,hu,act)
     draft(client,hu,tid,cat);submit(client,hu,[tid])
     ha=login(client,'admin')
@@ -140,25 +138,35 @@ def test_reinstatement_assigned_admin_boundary(client, single_owner):
     actor=client.get('/api/me').json()['id']
     with connection() as con:
         request=con.execute('SELECT requester_id,assigned_reviewer_id FROM reinstatement_requests WHERE id=?',(rid,)).fetchone()
-        assert request['requester_id']==actor==request['assigned_reviewer_id']
+        assert request['requester_id']==actor
+        assigned=request['assigned_reviewer_id']
+        assert assigned!=actor
+        assert (assigned is None)==single_owner
+    for decision in ('APPROVE','REJECT'):
+        assert client.post(url,headers=ha,json={**payload,'decision':decision}).status_code==403
     hu=login(client,'uploader')
     assert client.post(url,headers=hu,json=payload).status_code==403
-    if not single_owner:
-        hb=login(client,'backup')
-        assert client.post(url,headers=hb,json=payload).status_code==403
-        assert client.post(url,headers=hb,json={'decision':'REJECT','reason':'Tidak ditugaskan'}).status_code==403
-    ha=login(client,'admin')
     assert active(client,tid)['status']=='REVERSED'
-    assert client.post(url,headers=ha,json={'decision':'APPROVE','reason':''}).status_code==422
-    ok=client.post(url,headers=ha,json=payload)
+    if single_owner:
+        with tx() as con:
+            row=con.execute('SELECT status,reviewer_id FROM reinstatement_requests WHERE id=?',(rid,)).fetchone()
+            assert row['status']=='PENDING' and row['reviewer_id'] is None
+            # Previously created requests can still name the requester as assignee.
+            con.execute('UPDATE reinstatement_requests SET assigned_reviewer_id=? WHERE id=?',(actor,rid))
+        ha=login(client,'admin')
+        assert client.post(url,headers=ha,json=payload).status_code==403
+        return
+    hb=login(client,'backup')
+    assert client.get('/api/me').json()['id']==assigned
+    ok=client.post(url,headers=hb,json=payload)
     assert ok.status_code==200,ok.text
     assert active(client,tid)['status']=='APPROVED'
-    assert client.post(url,headers=ha,json=payload).status_code==409
+    assert client.post(url,headers=hb,json=payload).status_code==409
     with connection() as con:
         row=con.execute('SELECT status,reviewer_id,decision_reason FROM reinstatement_requests WHERE id=?',(rid,)).fetchone()
-        assert row['status']=='APPROVED' and row['reviewer_id']==actor and row['decision_reason']==payload['reason']
+        assert row['status']=='APPROVED' and row['reviewer_id']==assigned and row['decision_reason']==payload['reason']
         log=con.execute("SELECT actor_id FROM audit_logs WHERE action='REINSTATEMENT_APPROVE' AND target_id=?",(tid,)).fetchone()
-        assert log and log['actor_id']==actor
+        assert log and log['actor_id']==assigned
 
 
 def test_provisional_snooze_once_and_calendar_finalization(client):

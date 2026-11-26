@@ -822,7 +822,7 @@ def reinstatement(request:Request,txid:str,data:Reason):
         hours=json.loads(cal['hours_json']); holidays=json.loads(cal['holidays_json'])
         due=business_due(now(),holidays=holidays,hours=hours)
         verified=bool(cal['verified']);key=uid()
-        eligible=allrows(c,"SELECT id FROM users WHERE role='admin' AND active=1 ORDER BY created_at,name")
+        eligible=allrows(c,"SELECT id FROM users WHERE role='admin' AND active=1 AND id<>? ORDER BY created_at,name,id",(u['id'],))
         assigned=eligible[0]['id'] if eligible else None
         c.execute('''INSERT INTO reinstatement_requests(id,transaction_id,requester_id,reason,sla_status,calendar_quality,due_at,provisional_due_at,next_reminder_at,calendar_version,assigned_reviewer_id,created_at)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
@@ -843,7 +843,8 @@ def decide_reinstatement(request:Request,request_id:str,data:Decision):
         r=one(c,'SELECT * FROM reinstatement_requests WHERE id=?',(request_id,))
         if not r:raise HTTPException(404,'Permintaan tidak ditemukan')
         if r['status']!='PENDING':raise HTTPException(409,'Permintaan sudah diputuskan')
-        # Single integrated admin account mode: self-review allowed
+        if r['requester_id']==u['id']:
+            raise HTTPException(403,'Pemohon tidak dapat memutuskan pemulihan transaksinya sendiri')
         if r['assigned_reviewer_id'] is None or r['assigned_reviewer_id']!=u['id']:
             raise HTTPException(403,'Hanya reviewer admin yang ditugaskan boleh memutuskan request ini')
         t=one(c,'SELECT * FROM transactions WHERE id=?',(r['transaction_id'],))

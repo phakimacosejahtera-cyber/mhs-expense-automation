@@ -739,7 +739,7 @@ function reviewRecord(kind,id){
   const rows=kind==='transaction'?state.queue?.transactions:kind==='correction'?state.queue?.corrections:kind==='reinstatement'?state.queue?.reinstatements:null;
   return rows?.find(x=>x.id===id);
 }
-function assignedReview(r){return !!r.assigned_reviewer_id&&r.assigned_reviewer_id===state.me?.id}
+function assignedReview(r){return r.requester_id!==state.me?.id&&!!r.assigned_reviewer_id&&r.assigned_reviewer_id===state.me?.id}
 async function reviewsPage(){
   setHead('Review Queue','Periksa bukti dan alasan sebelum mengambil keputusan');
   const q=await json('/admin/review-queue');
