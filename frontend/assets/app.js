@@ -395,6 +395,7 @@ async function uploadPage(){
       <section class="panel panelpad">
         <h3>Unggah kuitansi</h3>
         <p class="muted">Satu kuitansi menghasilkan satu transaksi. PDF, PNG, JPEG, atau WEBP — maksimal 8 MB.</p>
+        ${acts.length?'':'<div class="notice">Buat aktivitas untuk mengelompokkan kuitansi pertama Anda. <button type="button" class="btn outline" data-nav="management">Buat aktivitas</button></div>'}
         <form id="batch-form">
           <div class="field mt"><label>Aktivitas*</label><select name="activity_id" required>${opts(acts,preferredUploadActivity(acts,lastUploadActivity),'Pilih aktivitas...')}</select></div>
           <div class="uploadbox"><strong>↥ Upload kuitansi</strong>
@@ -402,7 +403,7 @@ async function uploadPage(){
             <input id="upload-files" name="files" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple required>
           </div>
           <p id="upload-file-summary" class="tiny muted" aria-live="polite">Belum ada file dipilih.</p>
-          <div class="mt row wrap"><button class="btn primary" id="batch-upload-button" type="submit" ${ocrBusy?'disabled':''}>Upload &amp; Buat Draft →</button>
+          <div class="mt row wrap"><button class="btn primary" id="batch-upload-button" type="submit" ${ocrBusy||!acts.length?'disabled':''}>Upload &amp; Buat Draft →</button>
             <span class="tiny muted">Pembacaan otomatis gambar dan PDF hingga 5 halaman. Data yang kurang dapat diisi manual.</span></div>
           <p id="ocr-upload-progress" role="status" aria-live="polite" class="tiny muted mt">${h(uploadProgress)}</p>
         </form>

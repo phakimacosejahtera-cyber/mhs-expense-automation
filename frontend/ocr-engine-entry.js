@@ -4,7 +4,8 @@ import {enhancedImageBlob} from './ocr-preprocess.mjs';
 import {reading,adequate,selectReadings,summarize} from './ocr-selection.mjs';
 let activeWorker=null, progressCallback=()=>{};
 async function worker(){
-  if(!activeWorker)activeWorker=await createWorker('ind+eng',1,{logger(m){
+  const paths=document.body.dataset.host==='pages'?{workerPath:'/assets/ocr/worker.min.js',corePath:'/assets/ocr',langPath:'/assets/ocr'}:{};
+  if(!activeWorker)activeWorker=await createWorker('ind+eng',1,{...paths,logger(m){
     const p=Number(m?.progress);
     progressCallback(String(m?.status||'Memproses...'),Number.isFinite(p)?Math.round(p*100):null);
   }});

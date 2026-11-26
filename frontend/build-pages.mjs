@@ -32,6 +32,18 @@ try {
   await writeFile(path.join(assets, 'app.js'), js);
   await build({ entryPoints: [path.join(root, 'ocr-engine-entry.js')], bundle: true,
     platform: 'browser', format: 'iife', outfile: path.join(assets, 'ocr-engine.final.bundle.js') });
+  const ocrAssets=path.join(assets,'ocr');
+  await mkdir(ocrAssets);
+  const modules=path.join(root,'node_modules');
+  await copyFile(path.join(modules,'tesseract.js/dist/worker.min.js'),path.join(ocrAssets,'worker.min.js'));
+  for(const variant of ['','-simd','-relaxedsimd']){
+    const filename='tesseract-core'+variant+'-lstm.wasm.js';
+    await copyFile(path.join(modules,'tesseract.js-core',filename),path.join(ocrAssets,filename));
+  }
+  for(const lang of ['ind','eng']){
+    const filename=lang+'.traineddata.gz';
+    await copyFile(path.join(modules,'@tesseract.js-data',lang,'4.0.0_best_int',filename),path.join(ocrAssets,filename));
+  }
   for (const name of ['pages-excel','pages-pdf']) {
     await build({entryPoints:[path.join(root,name+'.mjs')],bundle:true,platform:'browser',format:'esm',outfile:path.join(assets,name+'.js')});
   }

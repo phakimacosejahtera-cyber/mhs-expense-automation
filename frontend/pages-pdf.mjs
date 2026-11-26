@@ -1,8 +1,9 @@
 import {getDocument,GlobalWorkerOptions} from 'pdfjs-dist/build/pdf.mjs';
 GlobalWorkerOptions.workerSrc='/assets/pages-pdf.worker.mjs';
 export async function recognize(file,engine,progress,options){
- const pdf=await getDocument({data:new Uint8Array(await file.arrayBuffer()),isEvalSupported:false}).promise;
+ const task=getDocument({data:new Uint8Array(await file.arrayBuffer()),isEvalSupported:false});
  try{
+  const pdf=await task.promise;
   if(pdf.numPages>5)throw Error('PDF maksimum 5 halaman untuk OCR otomatis');
   return await engine.recognizePdf(async(i,raster)=>{
    const page=await pdf.getPage(i);
@@ -14,5 +15,5 @@ export async function recognize(file,engine,progress,options){
    await page.render({canvas,viewport}).promise;out.png_base64=canvas.toDataURL('image/png').split(',')[1];
    canvas.width=canvas.height=0;return out;
   },progress,options);
- }finally{await pdf.destroy()}
+ }finally{await task.destroy()}
 }
