@@ -1045,6 +1045,31 @@ $('#mobile-mask').onclick=()=>setMobileNav(false);
 $('#logout').onclick=async()=>{try{await post('/auth/logout',{})}catch(e){}state.me=null;showLogin()};
 for(let button of document.querySelectorAll('[data-demo]'))button.onclick=()=>{let accounts={admin:['admin@mhs.local','AdminDemo123!']};let [email,password]=accounts[button.dataset.demo];$('#login-form [name=email]').value=email;$('#login-form [name=password]').value=password};
 if($('#login-form')) $('#login-form').onsubmit=async e=>{e.preventDefault();const email=$('#login-form [name=email]').value,password=$('#login-form [name=password]').value;try{let r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password}),credentials:'same-origin'});if(!r.ok)throw new Error('Email atau password salah');state.me=await json('/me');state.config=await json('/config');showApp();await nav('dashboard');toast('Berhasil masuk sebagai '+state.me.role)}catch(err){toast(err.message,true)}};
-(async()=>{try{state.me=await json('/me');state.config=await json('/config');showApp();await nav('dashboard')}catch(e){showLogin()}
- if(new URLSearchParams(location.search).get('login')==='denied'){toast('Login ditolak atau sesi Google gagal. Gunakan akun owner yang terdaftar.',true);history.replaceState(null,'',location.pathname)}
+(async()=>{try{state.me=await json('/me')}
+ catch(error){
+   showLogin();
+   if(new URLSearchParams(location.search).get('login')==='denied'){
+     toast('Login ditolak atau sesi Google gagal. Gunakan akun owner yang terdaftar.',true);
+     history.replaceState(null,'',location.pathname);
+   }
+   return;
+ }
+ showApp();
+ try {
+   state.config=await json('/config');
+ } catch(error) {
+   if(!state.me)return;
+   $('#navigation').replaceChildren();
+   setHead('Dashboard','Workspace Owner');
+   const notice=document.createElement('div');
+   notice.className='notice';
+   notice.textContent='Anda sudah masuk. Data dashboard belum tersedia.';
+   const retry=document.createElement('button');
+   retry.className='btn outline';
+   retry.textContent='Muat ulang dashboard';
+   retry.onclick=()=>location.reload();
+   $('#page-content').replaceChildren(notice,retry);
+   return;
+ }
+ await nav('dashboard');
 })();
