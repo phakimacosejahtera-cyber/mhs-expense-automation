@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test ocr-final.test.mjs ../tests/test_ocr_parser.mjs",
+    "build:pages": "node build-pages.mjs"
   },
   "keywords": [],
   "author": "",

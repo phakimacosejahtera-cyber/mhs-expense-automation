@@ -33,3 +33,6 @@ __MACOSX/
 docs/references/XTROI_UI_reference.html
 
 /.venv-ocr/
+
+/frontend/dist/
+/frontend/.pages-build-*/
