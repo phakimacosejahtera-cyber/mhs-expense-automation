@@ -44,3 +44,10 @@ test('PKCE exchange accepts the independently verified owner and hides tokens fr
   assert.match(result.headers.get('set-cookie'),/__Host-mhs-session=owner-token; Path=\/; Secure; HttpOnly/);
   assert.equal(await result.text(),'');
 });
+
+test('a temporary auth service outage keeps the owner session retryable',async t=>{
+  t.mock.method(globalThis,'fetch',async()=>new Response(null,{status:503}));
+  const res=await call('/api/dashboard',{headers:{Cookie:'__Host-mhs-session=test'}});
+  assert.equal(res.status,503);
+  assert.equal(res.headers.has('Set-Cookie'),false);
+});

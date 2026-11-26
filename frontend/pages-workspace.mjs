@@ -71,7 +71,8 @@ export async function workspace(request,config,token,user){
  if(!res.ok){
   const e=await res.json().catch(()=>({}));
   const detail=e.code==='PGRST202'?'Skema workspace belum dipasang di Supabase.':e.code==='P0001'?e.message:e.code==='42501'?'Akses database Owner ditolak.':e.code==='23505'?'Permintaan atau nama sudah terdaftar.':'Operasi database gagal. Periksa data dan status terbaru.';
-  return json({detail},e.code==='PGRST202'?503:res.status);
+  const code=/^(?:PGRST[0-9X]{3}|[0-9A-Z]{5})$/.test(e.code)?e.code:'HTTP '+res.status;
+  return json({detail:detail+' ('+code+')'},e.code==='PGRST202'?503:res.status);
  }
  const value=await res.json();
  if(['purge','empty_trash','storage'].includes(op)){
@@ -92,6 +93,10 @@ export async function workspace(request,config,token,user){
  }
  if(op==='finance'||op==='export'){
   const report=period(value,url.searchParams.get('year'),url.searchParams.get('month'),url.searchParams.get('activity_id'));
+  if(route==='GET dashboard'){
+   report.recent_approved=report.expenses.slice().sort((a,b)=>
+    b.created_at.localeCompare(a.created_at)||a.id.localeCompare(b.id)).slice(0,5);
+  }
   if(op==='finance')delete report.expenses;
   return json(report);
  }

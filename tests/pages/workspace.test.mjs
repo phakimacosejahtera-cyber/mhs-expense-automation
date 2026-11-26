@@ -16,3 +16,33 @@ test('filtered snapshot reconciles with the downloaded XLSX including cancelled 
  assert.equal(sheet.getCell('M2').value,'00009');assert.equal(sheet.getCell('B2').type,ExcelJS.ValueType.String);
  assert.equal(sheet.getCell('I2').value.hyperlink,'https://example.org/api/receipts/receipt-1');
 });
+
+test('owner dashboard returns the selected totals and five recent approved expenses in one RPC',async t=>{
+ const {workspace}=await import('../../frontend/pages-workspace.mjs');
+ const expenses=Array.from({length:7},(_,i)=>({
+   id:String(i),status:'APPROVED',activity_id:'a',amount_cents:1500,category_name:'ATK',
+   transaction_date:i===6?'2026-02-01':'2026-01-01',created_at:'2026-01-0'+(i+1)
+ }));
+ let calls=0;
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+   calls++;
+   assert.equal(JSON.parse(options.body).op,'finance');
+   return Response.json({expenses,incomes:[],drafts:2,pending_review:1});
+ });
+ const res=await workspace(new Request('https://test.pages.dev/api/dashboard?year=2026&month=1'),{base:'https://db.test',headers:{}},'test',{});
+ const data=await res.json();
+ assert.equal(res.status,200);
+ assert.equal(calls,1);
+ assert.equal(data.total_cents,9000);
+ assert.equal(data.drafts,2);
+ assert.deepEqual(data.recent_approved.map(x=>x.id),['5','4','3','2','1']);
+ assert.equal('expenses' in data,false);
+});
+
+test('database read errors keep their diagnostic code without returning private database details',async t=>{
+ const {workspace}=await import('../../frontend/pages-workspace.mjs');
+ t.mock.method(globalThis,'fetch',async()=>Response.json({code:'42501',message:'private SQL details'},{status:403}));
+ const res=await workspace(new Request('https://test.pages.dev/api/dashboard'),{base:'https://db.test',headers:{}},'test',{});
+ assert.equal(res.status,403);
+ assert.equal((await res.json()).detail,'Akses database Owner ditolak. (42501)');
+});

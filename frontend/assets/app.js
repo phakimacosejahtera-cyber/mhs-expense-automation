@@ -41,7 +41,7 @@ function stopWibClock(){
  if(wibClockTimer!==null){clearInterval(wibClockTimer);wibClockTimer=null}
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&wibClockTimer!==null)updateWibClock()});
-function showLogin(){stopWibClock();$('#login-screen').classList.remove('hidden');$('#app').classList.add('hidden')}
+function showLogin(){state.config=null;stopWibClock();$('#login-screen').classList.remove('hidden');$('#app').classList.add('hidden')}
 const navigationIcons={
  dashboard:'<rect x="3" y="3" width="7" height="7" rx="1.2"/><rect x="14" y="3" width="7" height="7" rx="1.2"/><rect x="3" y="14" width="7" height="7" rx="1.2"/><rect x="14" y="14" width="7" height="7" rx="1.2"/>',
  upload:'<path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/>',
@@ -83,9 +83,21 @@ function txTable(rows,showActions=true){
 }
 async function nav(page){
  state.page=page;renderNav();setMobileNav(false);
+ const content=$('#page-content');
+ const name=(state.me.role==='admin'?navAdmin:navUploader).find(([id])=>id===page)?.[2]||'Kalender';
+ setHead(name,'');
+ content.innerHTML='<div class="notice" role="status">Memuat data…</div>';
  try{
+   if(!state.config && ['upload','transactions','reviews','reports'].includes(page)){
+     const config=await json('/config');
+     if(!state.me || state.page!==page)return;
+     state.config=config;
+   }
  if(page==='dashboard')await dashboard();else if(page==='upload')await uploadPage();else if(page==='transactions')await transactionsPage();else if(page==='reviews')await reviewsPage();else if(page==='reports')await reportsPage();else if(page==='calendar')await calendarPage();else if(page==='management')await managementPage();else if(page==='audit')await auditPage();else if(page==='notifications')await notificationsPage();
- }catch(e){toast(e.message,true);$('#page-content').innerHTML=`<div class="notice danger-notice">${h(e.message)}</div>`}
+ }catch(e){
+   if(!state.me || state.page!==page)return;
+   content.innerHTML=`<div class="notice danger-notice" role="alert">${h(e.message)}</div><button type="button" class="btn outline" data-nav="${h(page)}">Coba lagi</button>`;
+ }
 }
 async function loadTx(){state.transactions=await json('/transactions');return state.transactions}
 let financeYear=0, financeMonth=0;
@@ -94,9 +106,16 @@ function financePeriodChange(e,page){financeYear=Number(e.target.value);financeM
 async function dashboard(){
  setHead('Dashboard','Ringkasan keuangan dan status pencatatan bukti transaksi');
  const isAdmin=state.me.role==='admin';
- const health=await json('/health');
- const finance=isAdmin && (health.finance||health.mode==='DEMO LOCAL');
- const [d,allTx]=await Promise.all([json(finance?'/finance/summary?year='+financeYear+(financeMonth?'&month='+financeMonth:''):'/dashboard'),loadTx()]);
+ const health=hostedPages?null:await json('/health');
+ const finance=isAdmin && (hostedPages||health.finance||health.mode==='DEMO LOCAL');
+ const query='?year='+financeYear+(financeMonth?'&month='+financeMonth:'');
+ let d,allTx;
+ if(hostedPages){
+   d=await json('/dashboard'+query);
+   allTx=d.recent_approved;
+ }else{
+   [d,allTx]=await Promise.all([json(finance?'/finance/summary'+query:'/dashboard'),loadTx()]);
+ }
  if(state.page!=='dashboard')return;
  const rows=finance?allTx.filter(t=>t.transaction_date>=d.start && t.transaction_date<d.end_exclusive):allTx;
  const scope=finance?(financeYear===0?'Semua Tahun':financeMonth?String(financeMonth).padStart(2,'0')+'/'+financeYear:String(financeYear)):'Seluruh periode';
@@ -1062,21 +1081,5 @@ if($('#login-form')) $('#login-form').onsubmit=async e=>{e.preventDefault();cons
    return;
  }
  showApp();
- try {
-   state.config=await json('/config');
- } catch(error) {
-   if(!state.me)return;
-   $('#navigation').replaceChildren();
-   setHead('Dashboard','Workspace Owner');
-   const notice=document.createElement('div');
-   notice.className='notice';
-   notice.textContent='Anda sudah masuk. Data dashboard belum tersedia.';
-   const retry=document.createElement('button');
-   retry.className='btn outline';
-   retry.textContent='Muat ulang dashboard';
-   retry.onclick=()=>location.reload();
-   $('#page-content').replaceChildren(notice,retry);
-   return;
- }
  await nav('dashboard');
 })();

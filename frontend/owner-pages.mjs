@@ -37,6 +37,7 @@ export function matchesOwner(user, env) {
 async function owner(config, env, token) {
   if (!token) return null;
   const res = await fetch(config.base+'/auth/v1/user', {headers:{...config.headers, Authorization:'Bearer '+token}, redirect:'manual'});
+  if (res.status===429 || res.status>=500) throw Error('auth unavailable');
   if (!res.ok) return null;
   const user = await res.json();
   return matchesOwner(user, env) ? user : null;

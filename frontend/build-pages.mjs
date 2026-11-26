@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 import { mkdir, mkdtemp, readFile, writeFile, copyFile, rename, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,6 @@ try {
   html = html.replace('<body>', '<body data-host="pages">').replace('LOCAL DEVELOPMENT • V0.1', 'AKSES OWNER')
     .replace('Local Development <small>v0.1 • Data tersimpan di SQLite lokal', 'MHS Expense Automation <small>Workspace Owner')
     .replace('DEVELOPMENT MODE', 'WORKSPACE OWNER');
-  await writeFile(path.join(stage, 'index.html'), html);
   for (const name of ['style.css', 'workspace-shell.css', 'storage-dashboard.css']) {
     await copyFile(path.join(root, 'assets', name), path.join(assets, name));
   }
@@ -26,6 +26,9 @@ try {
   const boot = js.indexOf('(async()=>{try{state.me=', demo);
   if (demo < 0 || boot < demo) throw Error('Inisialisasi aplikasi berubah');
   js = js.slice(0, demo) + js.slice(boot);
+  const version = createHash('sha256').update(js).digest('hex').slice(0,16);
+  html = html.replace(/src="\/assets\/app\.js(?:\?[^"]*)?"/, `src="/assets/app.js?v=${version}"`);
+  await writeFile(path.join(stage, 'index.html'), html);
   await writeFile(path.join(assets, 'app.js'), js);
   await build({ entryPoints: [path.join(root, 'ocr-engine-entry.js')], bundle: true,
     platform: 'browser', format: 'iife', outfile: path.join(assets, 'ocr-engine.final.bundle.js') });
