@@ -14,7 +14,7 @@ try {
   const end = html.indexOf('</div>', html.indexOf('<div class="security-hint">', start));
   if (start < 0 || end < start) throw Error('Markup login Phase 3.8 berubah');
   html = html.slice(0, start) + '<a class="btn primary full" href="/api/auth/google/start">Masuk dengan Google</a>' + html.slice(end + 6);
-  html = html.replace('LOCAL DEVELOPMENT • V0.1', 'AKSES OWNER')
+  html = html.replace('<body>', '<body data-host="pages">').replace('LOCAL DEVELOPMENT • V0.1', 'AKSES OWNER')
     .replace('Local Development <small>v0.1 • Data tersimpan di SQLite lokal', 'MHS Expense Automation <small>Workspace Owner')
     .replace('DEVELOPMENT MODE', 'WORKSPACE OWNER');
   await writeFile(path.join(stage, 'index.html'), html);
@@ -29,6 +29,10 @@ try {
   await writeFile(path.join(assets, 'app.js'), js);
   await build({ entryPoints: [path.join(root, 'ocr-engine-entry.js')], bundle: true,
     platform: 'browser', format: 'iife', outfile: path.join(assets, 'ocr-engine.final.bundle.js') });
+  for (const name of ['pages-excel','pages-pdf']) {
+    await build({entryPoints:[path.join(root,name+'.mjs')],bundle:true,platform:'browser',format:'esm',outfile:path.join(assets,name+'.js')});
+  }
+  await copyFile(path.join(root,'node_modules/pdfjs-dist/build/pdf.worker.min.mjs'),path.join(assets,'pages-pdf.worker.mjs'));
   await writeFile(path.join(stage, '_headers'), '/*\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: no-referrer\n  X-Frame-Options: SAMEORIGIN\n');
   await rm(dest, { recursive: true, force: true });
   await rename(stage, dest);

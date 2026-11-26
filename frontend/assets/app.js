@@ -5,6 +5,7 @@ const rp = cents => new Intl.NumberFormat('id-ID',{style:'currency',currency:'ID
 const short = s => s ? new Date(s).toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'short'}) : '—';
 const state={me:null,config:null,page:'dashboard',transactions:[],queue:null,selected:new Set(),
   ocrResults:new Map(),ocrStatus:new Map()};
+const hostedPages=document.body.dataset.host==='pages';
 const navUploader=[['dashboard','◫','Ringkasan'],['upload','↥','Upload Receipt'],['transactions','▤','My Transactions'],['reports','▥','My Reports'],['notifications','♧','Notifications']];
 const navAdmin=[['dashboard','◫','Dashboard'],['upload','⬆','Upload Receipt'],['reviews','☑','Review Queue'],['transactions','▤','All Transactions'],['reports','▥','Reports & Excel'],['management','⚙','Management'],['audit','☷','Audit Trail'],['notifications','♧','Notifications']];
 
@@ -94,7 +95,7 @@ async function dashboard(){
  setHead('Dashboard','Ringkasan keuangan dan status pencatatan bukti transaksi');
  const isAdmin=state.me.role==='admin';
  const health=await json('/health');
- const finance=isAdmin && health.mode==='DEMO LOCAL';
+ const finance=isAdmin && (health.finance||health.mode==='DEMO LOCAL');
  const [d,allTx]=await Promise.all([json(finance?'/finance/summary?year='+financeYear+(financeMonth?'&month='+financeMonth:''):'/dashboard'),loadTx()]);
  if(state.page!=='dashboard')return;
  const rows=finance?allTx.filter(t=>t.transaction_date>=d.start && t.transaction_date<d.end_exclusive):allTx;
@@ -289,6 +290,7 @@ function loadBrowserOCR(){
 
 function isImageOCRFile(file){return ['image/png','image/jpeg','image/webp','application/pdf'].includes(String(file?.type||'').toLowerCase())}
 async function recognizeReceipt(engine,file,id,progress,deep=false){
+  if(file.type==='application/pdf'&&hostedPages)return (await import('/assets/pages-pdf.js')).recognize(file,engine,progress,{deep});
   if(file.type==='application/pdf')return engine.recognizePdf((page,raster)=>json('/transactions/'+encodeURIComponent(id)+'/pdf-ocr-page?page='+page+'&raster='+raster),progress,{deep});
   return engine.recognize(file,progress,{deep});
 }
@@ -817,7 +819,7 @@ async function reviewAction(spec){
   };
 }
 async function reportsPage(){
- if(state.me.role==='admin' && (await json('/health')).mode==='DEMO LOCAL'){
+ if(state.me.role==='admin' && (hostedPages || (await json('/health')).mode==='DEMO LOCAL')){
    if(state.page!=='reports')return;
    setHead('Reports & Excel','Rekap keuangan berdasarkan periode pilihan');
    const params='year='+financeYear+(financeMonth?'&month='+financeMonth:'');
@@ -825,12 +827,15 @@ async function reportsPage(){
    if(state.page!=='reports')return;
    $('#page-content').innerHTML=`<div class="dash-toolbar"><div><h2>Rekap Keuangan MHS</h2><p>Periode yang sama dengan dashboard</p></div><div class="dash-toolbar-actions"><label class="finance-filter">Tahun <select id="report-year">${yearOptions(d)}</select></label><label class="finance-filter">Bulan <select id="report-month" ${financeYear===0?'disabled':''}><option value="0">Semua</option>${['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'].map((m,i)=>`<option value="${i+1}" ${financeMonth===i+1?'selected':''}>${m}</option>`).join('')}</select></label></div></div>
    <div class="dash-kpi-grid">${[['Pemasukan',d.income_cents],['Pengeluaran',d.total_cents],['Selisih tercatat',d.net_cents]].map(([label,v])=>`<div class="dash-card"><div class="dash-card-title">${label}</div><div class="dash-val">${rp(v)}</div></div>`).join('')}</div>
-   <section class="panel panelpad mt owner-report-card"><div class="owner-report-intro"><div class="owner-file-icon" aria-hidden="true">XLSX</div><div><h3>Unduh laporan periode</h3><p class="muted">Ringkasan, Semua Transaksi, Pemasukan, Pengeluaran, dan Report Info.</p><p class="tiny muted">${h(d.receipt_count)} pengeluaran disetujui · ${h(d.income_count)} pemasukan aktif</p></div></div><button class="btn primary" id="finance-export">↓ Unduh Excel (.xlsx)</button><p class="tiny muted">Snapshot tidak berubah setelah koreksi. Tautan kuitansi memerlukan login aktif pada server lokal. Bukan laporan pajak resmi.</p>${d.legacy_income_cents?`<div class="notice">Nilai lama tanpa tanggal ${rp(d.legacy_income_cents)} tidak dihitung.</div>`:''}</section>
+   <section class="panel panelpad mt owner-report-card"><div class="owner-report-intro"><div class="owner-file-icon" aria-hidden="true">XLSX</div><div><h3>Unduh laporan periode</h3><p class="muted">Ringkasan, Semua Transaksi, Pemasukan, Pengeluaran, dan Report Info.</p><p class="tiny muted">${h(d.receipt_count)} pengeluaran disetujui · ${h(d.income_count)} pemasukan aktif</p></div></div><button class="btn primary" id="finance-export">↓ Unduh Excel (.xlsx)</button><p class="tiny muted">Snapshot tidak berubah setelah koreksi. Tautan kuitansi memerlukan login aktif pada aplikasi. Bukan laporan pajak resmi.</p>${d.legacy_income_cents?`<div class="notice">Nilai lama tanpa tanggal ${rp(d.legacy_income_cents)} tidak dihitung.</div>`:''}</section>
    <details class="panel panelpad mt"><summary>Format Excel lama (opsional)</summary><p class="muted">Format kompatibilitas lama, seluruh periode atau aktivitas terpilih; tidak memuat pemasukan.</p><div class="field"><label>Aktivitas</label><select id="report-activity">${opts(state.config.activities,null,'Semua aktivitas')}</select></div><button class="btn outline mt" id="export-xlsx">Download format lama</button></details>`;
    $('#report-year').onchange=e=>financePeriodChange(e,'reports');
    $('#report-month').onchange=e=>{financeMonth=Number(e.target.value);nav('reports')};
-   $('#finance-export').onclick=async()=>{const btn=$('#finance-export');btn.disabled=true;try{const res=await api('/finance/export?'+params);const blob=await res.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='MHS_Rekap_Keuangan_'+(financeYear||'Semua_Tahun')+(financeMonth?'-'+String(financeMonth).padStart(2,'0'):'')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);toast('Laporan Excel berhasil dibuat')}catch(e){toast(e.message,true)}finally{btn.disabled=false}};
-   $('#export-xlsx').onclick=()=>{const a=$('#report-activity').value;window.location.href='/api/reports/export'+(a?'?activity_id='+encodeURIComponent(a):'')};
+   $('#finance-export').onclick=async()=>{const btn=$('#finance-export');btn.disabled=true;try{const res=await api('/finance/export?'+params,hostedPages?{method:'POST',body:'{}'}:{});const blob=hostedPages?await (await import('/assets/pages-excel.js')).workbook(await res.json(),location.origin):await res.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='MHS_Rekap_Keuangan_'+(financeYear||'Semua_Tahun')+(financeMonth?'-'+String(financeMonth).padStart(2,'0'):'')+'.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);toast('Laporan Excel berhasil dibuat')}catch(e){toast(e.message,true)}finally{btn.disabled=false}};
+   $('#export-xlsx').onclick=async()=>{const a=$('#report-activity').value,path='/reports/export'+(a?'?activity_id='+encodeURIComponent(a):'');
+   if(!hostedPages){window.location.href='/api'+path;return}
+   try {const data=await post(path,{});const blob=await (await import('/assets/pages-excel.js')).workbook(data,location.origin,true);
+   const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='MHS_Pengeluaran.xlsx';link.click();setTimeout(()=>URL.revokeObjectURL(link.href),2000)}catch(e){toast(e.message,true)}};
    return;
  }
  setHead('Reports & Excel','Ekspor snapshot XLSX dengan data APPROVED saja');const [d,rows]=await Promise.all([json('/dashboard'),loadTx()]);$('#page-content').innerHTML=`<div class="grid2"><section class="panel panelpad"><h3>Ringkasan Pengeluaran</h3><div class="kpi" style="box-shadow:none;margin:15px 0"><small>APPROVED TOTAL</small><strong>${rp(d.total_cents)}</strong><span class="muted tiny">${d.receipt_count} kuitansi disetujui</span></div><div class="field"><label>Filter aktivitas</label><select id="report-activity">${opts(state.config.activities,null,'Semua aktivitas')}</select></div><button class="btn primary mt" id="export-xlsx">⬇ Download Excel (.xlsx)</button><p class="muted tiny">Berisi Transactions, Summary, dan Report Info. Histori ekspor tidak berubah setelah transaksi dikoreksi atau dibatalkan.</p></section><section class="panel panelpad"><h3>Kontrol Pelaporan</h3><div class="notice mt">Transaksi REVERSED, REJECTED, draft, dan PENDING_REVIEW tidak masuk total. Koreksi pending juga tidak mengubah nilai resmi.</div><p class="muted mt">Tautan kuitansi di Excel memerlukan login aktif sesuai hak akses pengguna.</p></section></div><section class="panel mt"><div class="panelhead"><h3>Data yang akan diekspor</h3></div>${txTable(rows.filter(t=>t.status==='APPROVED'),false)}</section>`;
@@ -874,7 +879,7 @@ async function managementPage(){
    }catch(err){toast(err.message,true);btn.disabled=false}
  };
  refreshDeleted();
- if((await json("/health")).mode==="DEMO LOCAL"&&state.page==="management"){
+ if((hostedPages || (await json("/health")).mode==="DEMO LOCAL")&&state.page==="management"){
    const emptyTrash=$('#empty-trash');
    emptyTrash.hidden=false;emptyTrash.style.display='';
    emptyTrash.onclick=async()=>{
@@ -883,14 +888,16 @@ async function managementPage(){
        const preview=await json('/admin/drafts/empty-trash');
        if(!emptyTrash.isConnected)return;
        if(!preview.count)return toast('Draft terhapus sudah kosong.');
-       if(!confirm('Hapus permanen seluruh '+preview.count+' draft terhapus beserta file kuitansinya dari penyimpanan lokal? Semua draft ini tidak dapat dipulihkan dari aplikasi.'))return;
+       if(!confirm('Hapus permanen seluruh '+preview.count+' draft terhapus beserta file kuitansinya dari penyimpanan? Semua draft ini tidak dapat dipulihkan dari aplikasi.'))return;
        const result=await post('/admin/drafts/empty-trash',{token:preview.token});
        toast(result.count+' draft dihapus permanen.'+(result.pending?' Sebagian file akan dibersihkan saat aplikasi dibuka kembali.':''));
        document.querySelector('#storage-check')?.click();
      }catch(err){toast(err.message,true)}finally{emptyTrash.disabled=false;if(emptyTrash.isConnected)await refreshDeleted()}
    };
-   await setupBackupPanel();
-   if(state.page==="management")setupStoragePanel();
+   if(hostedPages){
+     const usage=await json('/admin/storage/status');
+     if(state.page==='management')$('#storage-panel').textContent='Penyimpanan kuitansi privat: '+usage.files+' file · '+storageSize(usage.bytes);
+   }else{await setupBackupPanel();if(state.page==="management")setupStoragePanel();}
  }
  if(state.page!=="management")return;
  const search=(items,q)=>items.filter(x=>x.name.toLowerCase().includes(q.trim().toLowerCase()));

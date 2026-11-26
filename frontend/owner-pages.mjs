@@ -1,3 +1,4 @@
+import {workspace} from './pages-workspace.mjs';
 const verifierCookie = '__Host-mhs-verifier';
 const sessionCookie = '__Host-mhs-session';
 const csrfCookie = '__Host-mhs-csrf';
@@ -76,7 +77,10 @@ export async function handle({request, env}) {
     const user = await owner(config,env,token);
     if (!user) return response({detail:'Masuk dengan akun Owner'},401);
     if (request.method === 'GET' && pathname === '/api/me') return response({id:user.id,role:'admin',name:user.email,csrf},200);
-    return response({detail:'Rute belum tersedia'},404);
+    if (!['GET','HEAD'].includes(request.method) && (!csrf || csrf !== request.headers.get('X-CSRF-Token') || request.headers.get('Origin') !== env.MHS_PUBLIC_ORIGIN))
+      return response({detail:'Permintaan ditolak'},403);
+    try { return await workspace(request,config,token,user); }
+    catch { return response({detail:'Workspace gagal memproses permintaan.'},503); }
   } catch {
     return response({detail:'Layanan autentikasi belum tersedia'},503);
   }
