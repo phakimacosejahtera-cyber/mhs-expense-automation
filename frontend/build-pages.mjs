@@ -15,13 +15,14 @@ try {
   const start = html.indexOf('<form id="login-form">');
   const end = html.indexOf('</div>', html.indexOf('<div class="security-hint">', start));
   if (start < 0 || end < start) throw Error('Markup login Phase 3.8 berubah');
-  html = html.slice(0, start) + '<p id="owner-login-notice" class="notice" role="alert" hidden></p><a class="btn primary full" href="/api/auth/google/start">Masuk dengan Google</a>' + html.slice(end + 6);
+  html = html.slice(0, start) + '<p id="owner-login-notice" class="notice" role="alert" hidden></p><a class="btn primary full" href="/api/auth/google/start">Masuk dengan Google</a><details class="mt"><summary>Masuk dengan email perusahaan</summary><form id="company-otp"><label>Email perusahaan<input name="email" type="email" autocomplete="email" required></label><button type="button" id="send-code" class="btn outline">Kirim kode</button><div id="otp-entry" hidden><label>Kode dari email<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6,10}"></label><button class="btn primary" type="submit">Verifikasi dan masuk</button></div><p role="status"></p></form></details><script type="module" src="/assets/company-login.js"></script>' + html.slice(end + 6);
   html = html.replace('<body>', '<body data-host="pages">').replace('LOCAL DEVELOPMENT • V0.1', 'AKSES OWNER')
     .replace('Local Development <small>v0.1 • Data tersimpan di SQLite lokal', 'MHS Expense Automation <small>Workspace Owner')
     .replace('DEVELOPMENT MODE', 'WORKSPACE OWNER');
   for (const name of ['style.css', 'workspace-shell.css', 'storage-dashboard.css']) {
     await copyFile(path.join(root, 'assets', name), path.join(assets, name));
   }
+  await copyFile(path.join(root,'company-login.js'),path.join(assets,'company-login.js'));
   let js = await readFile(path.join(root, 'assets/app.js'), 'utf8');
   const demo = js.indexOf('for(let button of document.querySelectorAll(\'[data-demo]\'))');
   const boot = js.indexOf('(async()=>{try{state.me=', demo);

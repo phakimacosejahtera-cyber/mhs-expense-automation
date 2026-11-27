@@ -76,6 +76,26 @@ export async function handle({request, env}) {
       const age = Math.min(Number(session.expires_in) || 0, 3600);
       return response(null,302,[cookie(verifierCookie,'',0),cookie(sessionCookie,session.access_token,age),cookie(csrfCookie,random(),age)],'/');
     }
+    if (request.method==='POST' && ['/api/auth/email/start','/api/auth/email/verify'].includes(pathname)) {
+      if (request.headers.get('Origin')!==env.MHS_PUBLIC_ORIGIN || !request.headers.get('Content-Type')?.startsWith('application/json')) return response({detail:'Permintaan ditolak'},403);
+      const input=await request.json().catch(()=>null);
+      const email='admin@muliahakimaco.co.id';
+      if (typeof input?.email!=='string' || input.email.trim().toLowerCase()!==email) return response({detail:'Gunakan email Owner perusahaan.'},400);
+      const verify=pathname.endsWith('/verify');
+      if (verify && !/^\d{6,10}$/.test(String(input.code||''))) return response({detail:'Periksa kode yang diterima.'},400);
+      const result=await fetch(config.base+'/auth/v1/'+(verify?'verify':'otp'),{method:'POST',redirect:'manual',headers:{...config.headers,'Content-Type':'application/json'},body:JSON.stringify(verify?{email,type:'email',token:String(input.code)}:{email,create_user:true})});
+      if (!result.ok) {
+        const failure=await result.json().catch(()=>({}));
+        const detail=result.status===429?'Terlalu banyak permintaan. Tunggu sebelum mencoba lagi.':verify?'Kode salah atau kedaluwarsa.':failure.code==='email_address_not_authorized'?'Pengirim email Supabase belum diizinkan mengirim ke alamat perusahaan.':'Pengiriman kode gagal. Periksa konfigurasi email Supabase.';
+        return response({detail},result.status===429?429:400);
+      }
+      if (!verify) return response({ok:true},200);
+      const session=await result.json();
+      const verified=await owner(config,env,session.access_token);
+      if (verified?.email?.toLowerCase()!==email) return response({detail:'Email sudah diverifikasi tetapi akses Owner belum aktif.'},403);
+      const age=Math.min(Number(session.expires_in)||0,3600);
+      return response({ok:true},200,[cookie(sessionCookie,session.access_token,age),cookie(csrfCookie,random(),age)]);
+    }
     const token = readCookie(request,sessionCookie);
     const csrf = readCookie(request,csrfCookie);
     if (request.method === 'POST' && pathname === '/api/auth/logout') {
