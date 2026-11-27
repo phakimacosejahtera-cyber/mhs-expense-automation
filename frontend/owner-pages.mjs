@@ -83,13 +83,22 @@ export async function handle({request, env}) {
       if (typeof input?.email!=='string' || input.email.trim().toLowerCase()!==email) return response({detail:'Gunakan email Owner perusahaan.'},400);
       const verify=pathname.endsWith('/verify');
       if (verify && !/^\d{6,10}$/.test(String(input.code||''))) return response({detail:'Periksa kode yang diterima.'},400);
-      const result=await fetch(config.base+'/auth/v1/'+(verify?'verify':'otp'),{method:'POST',redirect:'manual',headers:{...config.headers,'Content-Type':'application/json'},body:JSON.stringify(verify?{email,type:'email',token:String(input.code)}:{email,create_user:true})});
+      const endpoint=new URL(config.base+'/auth/v1/'+(verify?'verify':'otp'));
+      let payload={email,type:'email',token:String(input.code||'')};
+      let verifier;
+      if (!verify) {
+        verifier=random();
+        const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier));
+        endpoint.searchParams.set('redirect_to',env.MHS_PUBLIC_ORIGIN+callback);
+        payload={email,create_user:true,code_challenge_method:'s256',code_challenge:encode(new Uint8Array(digest))};
+      }
+      const result=await fetch(endpoint.href,{method:'POST',redirect:'manual',headers:{...config.headers,'Content-Type':'application/json'},body:JSON.stringify(payload)});
       if (!result.ok) {
         const failure=await result.json().catch(()=>({}));
         const detail=result.status===429?'Terlalu banyak permintaan. Tunggu sebelum mencoba lagi.':verify?'Kode salah atau kedaluwarsa.':failure.code==='email_address_not_authorized'?'Pengirim email Supabase belum diizinkan mengirim ke alamat perusahaan.':'Pengiriman kode gagal. Periksa konfigurasi email Supabase.';
         return response({detail},result.status===429?429:400);
       }
-      if (!verify) return response({ok:true},200);
+      if (!verify) return response({ok:true},200,[cookie(verifierCookie,verifier,3600)]);
       const session=await result.json();
       const verified=await owner(config,env,session.access_token);
       if (verified?.email?.toLowerCase()!==email) return response({detail:'Email sudah diverifikasi tetapi akses Owner belum aktif.'},403);

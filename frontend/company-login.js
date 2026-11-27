@@ -15,8 +15,8 @@ async function login(verify){
     if(!response.ok)throw Error(data.detail||'Permintaan gagal.');
     if(verify){location.replace('/');return}
     entry.hidden=false;form.elements.code.required=true;
-    status.textContent='Periksa kotak masuk atau spam untuk kode verifikasi.';
-    form.elements.code.focus();
+    status.textContent='Buka tautan pada email terbaru dengan browser yang digunakan untuk meminta email ini. Jika email berisi kode angka, masukkan di bawah.';
+
   }catch(error){status.textContent=error.message}
   finally{busy=false;send.disabled=false}
 }

@@ -58,3 +58,29 @@ test('a stale callback preserves the existing session',async()=>{
   assert.equal(stale.headers.get('location'),'/?login=retry');
   assert.equal(stale.headers.has('set-cookie'),false);
 });
+
+test('company magic link returns to the approved callback and creates an owner session',async t=>{
+  const email='admin@muliahakimaco.co.id';
+  let challenge;
+  t.mock.method(globalThis,'fetch',async(url,init)=>{
+    const target=new URL(url);
+    if(target.pathname.endsWith('/otp')){
+      assert.equal(target.searchParams.get('redirect_to'),env.MHS_PUBLIC_ORIGIN+'/api/auth/google/callback');
+      const body=JSON.parse(init.body);assert.equal(body.email,email);assert.equal(body.code_challenge_method,'s256');
+      challenge=body.code_challenge;return Response.json({});
+    }
+    if(target.pathname.endsWith('/token')){
+      const {code_verifier}=JSON.parse(init.body);
+      assert.equal(Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(code_verifier))).toString('base64url'),challenge);
+      return Response.json({access_token:'fixture',expires_in:3600});
+    }
+    if(target.pathname.endsWith('/user'))return Response.json({email});
+    assert.ok(target.pathname.endsWith('/rpc/mhs_activate_company_owner'));return Response.json(true);
+  });
+  const start=await call('/api/auth/email/start',{method:'POST',headers:{Origin:env.MHS_PUBLIC_ORIGIN,'Content-Type':'application/json'},body:JSON.stringify({email})});
+  assert.equal(start.status,200);
+  const cookie=start.headers.get('Set-Cookie').split(';')[0];
+  const done=await call('/api/auth/google/callback?code=test',{headers:{Cookie:cookie}});
+  assert.equal(done.headers.get('Location'),'/');
+  assert.match(done.headers.get('Set-Cookie'),/__Host-mhs-session=fixture/);
+});
