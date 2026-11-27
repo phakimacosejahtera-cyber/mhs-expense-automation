@@ -1,3 +1,4 @@
+import './verify-finance-export.mjs';
 import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
 import { mkdir, mkdtemp, readFile, writeFile, copyFile, rename, rm } from 'node:fs/promises';

@@ -1,7 +1,7 @@
 // PT Mulia Hakimaco Sejahtera. Local V0.1: no fabricated OCR or fake financial results.
 const $ = s => document.querySelector(s);
 const h = (v='') => String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
-const rp = cents => new Intl.NumberFormat('id-ID',{style:'currency',currency:'IDR',maximumFractionDigits:0}).format((Number(cents)||0)/100);
+const rp = cents => new Intl.NumberFormat('id-ID',{style:'currency',currency:'IDR',minimumFractionDigits:0,maximumFractionDigits:2}).format((Number(cents)||0)/100);
 const short = s => s ? new Date(s).toLocaleString('id-ID',{dateStyle:'medium',timeStyle:'short'}) : '—';
 const state={me:null,config:null,page:'dashboard',transactions:[],queue:null,selected:new Set(),
   ocrResults:new Map(),ocrStatus:new Map()};
@@ -225,14 +225,14 @@ async function dashboard(){
          </svg>
          <div class="donut-center">
            <small>TOTAL</small>
-           <strong>${shortRp(d.total_cents||0)}</strong>
+           <strong style="font-size:${Math.min(19,Math.floor(156/fmtRp(d.total_cents).length))}px">${fmtRp(d.total_cents)}</strong>
          </div>
        </div>
        <div class="donut-legends">
          ${segments.length?segments.map(s=>`
            <div class="donut-leg-item">
              <span><i class="dot-sq" style="background:${s.color};border-radius:50%"></i>${h(s.category)}</span>
-             <strong>${s.pct}%</strong>
+             <strong>${fmtRp(s.total_cents)} · ${s.pct}%</strong>
            </div>`).join(''):'<div class="tiny muted" style="text-align:center">Belum ada pengeluaran disetujui</div>'}
        </div>
      </div>
