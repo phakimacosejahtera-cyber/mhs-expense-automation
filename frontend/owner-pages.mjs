@@ -42,13 +42,13 @@ async function owner(config, env, token) {
   const user = await res.json();
   if (matchesOwner(user, env)) return user;
   if (user.email?.toLowerCase() !== 'admi@muliahakimaco.co.id') return null;
-  const access = await fetch(config.base+'/rest/v1/rpc/mhs_pages_api', {
+  const access = await fetch(config.base+'/rest/v1/rpc/mhs_activate_company_owner', {
     method:'POST', redirect:'manual', headers:{...config.headers, Authorization:'Bearer '+token,'Content-Type':'application/json'},
-    body:JSON.stringify({op:'config'})
+    body:'{}'
   });
   if (access.status===403 || access.status===401) return null;
   if (!access.ok) throw Error('workspace unavailable');
-  return user;
+  return await access.json() === true ? user : null;
 }
 export async function handle({request, env}) {
   let config;
