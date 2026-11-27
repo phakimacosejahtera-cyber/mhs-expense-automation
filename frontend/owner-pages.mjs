@@ -40,7 +40,15 @@ async function owner(config, env, token) {
   if (res.status===429 || res.status>=500) throw Error('auth unavailable');
   if (!res.ok) return null;
   const user = await res.json();
-  return matchesOwner(user, env) ? user : null;
+  if (matchesOwner(user, env)) return user;
+  if (user.email?.toLowerCase() !== 'admin@muliahakimaco.co.id') return null;
+  const access = await fetch(config.base+'/rest/v1/rpc/mhs_activate_company_owner', {
+    method:'POST', redirect:'manual', headers:{...config.headers, Authorization:'Bearer '+token,'Content-Type':'application/json'},
+    body:'{}'
+  });
+  if (access.status===403 || access.status===401) return null;
+  if (!access.ok) throw Error('workspace unavailable');
+  return await access.json() === true ? user : null;
 }
 export async function handle({request, env}) {
   let config;
