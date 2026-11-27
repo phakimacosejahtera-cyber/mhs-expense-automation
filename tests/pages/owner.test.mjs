@@ -23,7 +23,7 @@ test('login uses the pinned HTTPS callback and a host-scoped verifier',async()=>
   assert.match(r.headers.get('set-cookie'),/__Host-mhs-verifier=[\w-]{43}; Path=\/; Secure; HttpOnly/);
 });
 test('direct callback, missing session, foreign origin and cross-site logout fail closed',async()=>{
-  assert.equal((await call('/api/auth/google/callback?code=x')).headers.get('location'),'/?login=denied');
+  assert.equal((await call('/api/auth/google/callback?code=x')).headers.get('location'),'/?login=retry');
   assert.equal((await call('/api/me')).status,401);
   assert.equal((await call('/api/auth/logout',{method:'POST'})).status,403);
   assert.equal((await handle({request:new Request('https://other.example/api/me'),env})).status,503);
@@ -50,4 +50,11 @@ test('a temporary auth service outage keeps the owner session retryable',async t
   const res=await call('/api/dashboard',{headers:{Cookie:'__Host-mhs-session=test'}});
   assert.equal(res.status,503);
   assert.equal(res.headers.has('Set-Cookie'),false);
+});
+
+test('a stale callback preserves the existing session',async()=>{
+  const init={headers:{Cookie:'__Host-mhs-session=current'}};
+  const stale=await call('/api/auth/google/callback?error_code=bad_oauth_state',init);
+  assert.equal(stale.headers.get('location'),'/?login=retry');
+  assert.equal(stale.headers.has('set-cookie'),false);
 });

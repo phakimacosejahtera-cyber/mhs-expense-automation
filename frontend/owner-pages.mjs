@@ -59,11 +59,12 @@ export async function handle({request, env}) {
     if (request.method === 'GET' && pathname === callback) {
       const verifier = readCookie(request,verifierCookie);
       const code = searchParams.get('code');
-      if (!/^[\w-]{43}$/.test(verifier) || !code || code.length>2048) return response(null,302,clear,'/?login=denied');
+      if (searchParams.has('error') || !/^[\w-]{43}$/.test(verifier) || !code || code.length>2048) return response(null,302,[],'/?login=retry');
       const res = await fetch(config.base+'/auth/v1/token?grant_type=pkce',{method:'POST',redirect:'manual',
         headers:{...config.headers,'Content-Type':'application/json'},body:JSON.stringify({auth_code:code,code_verifier:verifier})});
-      const session = res.ok ? await res.json() : {};
-      if (!await owner(config,env,session.access_token)) return response(null,302,clear,'/?login=denied');
+      if (!res.ok) return response(null,302,[],'/?login=retry');
+      const session = await res.json();
+      if (!await owner(config,env,session.access_token)) return response(null,302,[],'/?login=denied');
       const age = Math.min(Number(session.expires_in) || 0, 3600);
       return response(null,302,[cookie(verifierCookie,'',0),cookie(sessionCookie,session.access_token,age),cookie(csrfCookie,random(),age)],'/');
     }

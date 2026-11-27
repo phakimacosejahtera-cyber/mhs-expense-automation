@@ -15,7 +15,7 @@ try {
   const start = html.indexOf('<form id="login-form">');
   const end = html.indexOf('</div>', html.indexOf('<div class="security-hint">', start));
   if (start < 0 || end < start) throw Error('Markup login Phase 3.8 berubah');
-  html = html.slice(0, start) + '<a class="btn primary full" href="/api/auth/google/start">Masuk dengan Google</a>' + html.slice(end + 6);
+  html = html.slice(0, start) + '<p id="owner-login-notice" class="notice" role="alert" hidden></p><a class="btn primary full" href="/api/auth/google/start">Masuk dengan Google</a>' + html.slice(end + 6);
   html = html.replace('<body>', '<body data-host="pages">').replace('LOCAL DEVELOPMENT • V0.1', 'AKSES OWNER')
     .replace('Local Development <small>v0.1 • Data tersimpan di SQLite lokal', 'MHS Expense Automation <small>Workspace Owner')
     .replace('DEVELOPMENT MODE', 'WORKSPACE OWNER');
